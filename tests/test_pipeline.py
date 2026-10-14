@@ -203,6 +203,19 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('--spacing-',(self.run/'tokens.css').read_text())
         self.assertEqual(verify(self.run)['status'],'passed')
 
+    def test_preview_embeds_source_assets_for_offline_delivery(self):
+        self.model();export(self.run)
+        html=(self.run/'preview.html').read_text(encoding='utf-8')
+        assets=Path(__file__).resolve().parent.parent/'assets'
+        for mime,name in [('font/woff2','jetbrains-mono-latin.woff2'),('image/png','yohoia-avatar.png')]:
+            encoded=re.search(r'data:'+re.escape(mime)+r';base64,([A-Za-z0-9+/=]+)',html)
+            self.assertIsNotNone(encoded)
+            self.assertEqual(base64.b64decode(encoded[1]),(assets/name).read_bytes())
+        self.assertNotRegex(html,r'__PREVIEW_[A-Z_]+__')
+        self.assertNotIn('__PAYLOAD__',html)
+        self.assertIn((assets/'preview.js').read_text(encoding='utf-8'),html)
+        self.assertNotRegex(html,r'<script[^>]+src=|<link[^>]+rel=["\']stylesheet')
+
     def test_layout_metrics_require_evidence_and_ranges_stay_out_of_css(self):
         model=self.model();ref=next(e['id'] for e in model['evidence'] if e['property']=='paddingLeft')
         model['layoutMetrics']={'cardPadding':{'value':'16px','status':'observed','evidenceIds':[ref]},

@@ -1,4 +1,5 @@
 """Generate all handoff files from one reviewed model."""
+import base64
 import json
 from pathlib import Path
 from model import TYPE_PROPS, safe_css, validate_model
@@ -205,7 +206,15 @@ def generate(model, run):
     view_model={key:export_model[key] for key in ('siteName','sourceUrl','overview','tokens','guidelines')}
     payload = {'model':view_model,'files':files,'css':css_map,'compactFiles':COMPACT_FILES,
         'reference':presentation(export_model)}
-    template = (Path(__file__).resolve().parent.parent/'assets'/'preview.html').read_text(encoding='utf-8')
+    assets = Path(__file__).resolve().parent.parent/'assets'
+    template = (assets/'preview.html').read_text(encoding='utf-8')
+    preview_css = (assets/'preview.css').read_text(encoding='utf-8').replace(
+        '__PREVIEW_FONT_DATA_URL__', 'data:font/woff2;base64,' +
+        base64.b64encode((assets/'jetbrains-mono-latin.woff2').read_bytes()).decode('ascii'))
+    template = template.replace('__PREVIEW_CSS__', preview_css).replace(
+        '__PREVIEW_JS__', (assets/'preview.js').read_text(encoding='utf-8')).replace(
+        '__PREVIEW_AVATAR_DATA_URL__', 'data:image/png;base64,' +
+        base64.b64encode((assets/'yohoia-avatar.png').read_bytes()).decode('ascii'))
     encoded = json.dumps(payload,ensure_ascii=False).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
     files['preview.html'] = template.replace('__PAYLOAD__',encoded)
     return files

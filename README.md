@@ -1,8 +1,10 @@
-![yoho-design-extractor：从网站观察到设计文件](assets/readme/hero.svg)
+![SpecKit：从网站观察到设计文件](assets/readme/hero.svg)
 
-# yoho-design-extractor
+# SpecKit
 
 把网站的视觉语言，整理成有来源依据的设计文件和本地预览。
+
+展示名称为 **SpecKit**，安装标识与 Skill 目录名为 `speckit`。
 
 ![自动测试样例：深色文字、白色表面、16px/24px 排版与 6px 圆角](assets/readme/specimen.svg)
 
@@ -15,13 +17,13 @@
 让 Agent 安装，复制这句话：
 
 ```text
-请帮我安装这个 Skill：https://github.com/Yohoia/yoho-design-extractor
+请帮我安装这个 Skill：https://github.com/Yohoia/yoho-speckit
 ```
 
 也可使用 Skills CLI：
 
 ```bash
-npx skills add Yohoia/yoho-design-extractor --skill yoho-design-extractor
+npx skills add Yohoia/yoho-speckit --skill speckit
 ```
 
 安装后，向 Agent 提出第一个请求：
@@ -30,7 +32,7 @@ npx skills add Yohoia/yoho-design-extractor --skill yoho-design-extractor
 提取这个网站的设计规范，生成 DESIGN.md 和可预览的样式文件：<网址>。只分析这一个页面。
 ```
 
-CLI 安装需要 Node.js。手动安装时，把仓库根目录复制为 Agent 的 `yoho-design-extractor` Skill 文件夹；支持本地路径的环境也可直接引用 [SKILL.md](SKILL.md)。无需预装 Firecrawl Skill。
+CLI 安装需要 Node.js。手动安装时，把仓库根目录复制为 Agent 的 `speckit` Skill 文件夹；支持本地路径的环境也可直接引用 [SKILL.md](SKILL.md)。无需预装 Firecrawl Skill。
 
 ## 交付文件
 
@@ -74,7 +76,7 @@ npm ci --ignore-scripts
 node src/profile.ts setup firecrawl
 ```
 
-用户亲自打开返回的本机链接并保存 Key；密钥存入系统凭据库，不需贴进聊天。存储引用兼容此前保存的 Key，Skill 改名不会迁移或删除凭据。
+用户亲自打开返回的本机链接并保存 Key；密钥存入系统凭据库，不需贴进聊天。凭据声明和存储引用兼容此前保存的 Key，Skill 改名不会迁移或删除凭据。
 
 凭据页和 Node.js 是可选配置，宿主浏览器路线不需要它们。更多说明见 [凭据组件](scripts/credential-ui/README.md) 与 [Firecrawl 适配](references/firecrawl.md)。
 
@@ -93,6 +95,23 @@ node src/profile.ts setup firecrawl
 
 ## 开发与来源
 
+项目按职责组织：
+
+| 路径 | 职责 |
+| --- | --- |
+| `SKILL.md` | Agent 的执行入口 |
+| `references/` | 采集、后端适配、数据与交付规范，按主流程读取 |
+| `scripts/design.py` / `capture_firecrawl.py` | 核心命令入口 / 可选 Firecrawl 采集器 |
+| `scripts/common.py` / `model.py` | 计划、证据账本与数据建模校验 |
+| `scripts/colors.py` / `reference.py` / `documents.py` / `exporter.py` | 颜色转换、展示摘要、文档生成与统一导出 |
+| `assets/preview.html` / `preview.css` / `preview.js` | 预览的结构、样式与交互源码 |
+| `assets/` 下的字体、头像与许可 | 导出器内嵌的资源及其授权说明 |
+| `assets/readme/` | 仓库首页插图 |
+| `scripts/credential-ui/` | 可选凭据组件，含源码、浏览器运行文件、声明、锁文件与测试 |
+| `tests/` | 核心流程回归测试 |
+
+修改预览时编辑三份源码；导出器将 CSS、JS、字体与头像内嵌到最终 `preview.html`，交付时无需携带这三份源码或安装前端依赖。字体和头像只维护独立资源文件。
+
 在仓库根目录运行：
 
 ```bash
@@ -100,5 +119,11 @@ python3 -m unittest discover -s tests -v
 ```
 
 凭据组件的检查、构建、测试与原生测试见其 [README](scripts/credential-ui/README.md)；原生测试使用随机假凭据并清理。
+
+`.DS_Store`、`__pycache__/`、`*.pyc`、`node_modules/` 和临时构建缓存可删除或重新生成，已由 `.gitignore` 排除。使用 `python3 -B -m unittest discover -s tests -v` 可避免测试产生 Python 缓存。运行产物与评审记录放在 Skill 外部。
+
+保留凭据组件的 `public/app.js`：它由 `web/app.ts` 构建，但用户首次运行需要它；同时保留 `package-lock.json`、`component.json`、测试和许可证。`.git/` 保存版本记录，不属于清理对象。
+
+Design Tokens 的自有 JSON 扩展继续使用历史命名空间 `org.yoho-design-extractor`，以兼容已生成文件。
 
 采用 [MIT 许可](LICENSE)。方法参考 [website-rebuild](https://github.com/boyang-hu/website-rebuild-skill) 的证据留存与 [Refero](https://styles.refero.design/) 的展示结构；可选凭据组件来自 oil-skill-creator，保留源码、测试与 [MIT 许可](scripts/credential-ui/LICENSE)。Firecrawl 与 Tailwind 的服务和构建能力由各自项目提供。

@@ -1,5 +1,5 @@
 ---
-name: yoho-design-extractor
+name: speckit
 description: 从网站网址提取有来源依据的设计规范，生成 DESIGN.md、CSS Variables、Tailwind v4、Design Tokens 和 Refero 式 preview.html。用于网站设计语言分析与设计文件交付；不用于整站复刻、普通内容抓取、网站开发或修改业务代码。单独提供网址但没有设计提取意图时不触发。
 license: MIT
 compatibility: 核心脚本需要 Python 3.10+，只使用标准库；采集需要宿主浏览器、Firecrawl 连接器、已有 CLI 或 HTTP API 中的一条可用路线。HTTP 路线无需安装 Firecrawl。可选凭据页需要 Node.js 22.18+ 和系统凭据服务。跨平台代码不等于跨平台已实测。
@@ -7,7 +7,7 @@ metadata:
   version: "0.1.0"
 ---
 
-# yoho-design-extractor
+# SpecKit
 
 把网站的实际设计语言整理为可复用文件和可浏览的样式参考页。
 截图证明构图，源声明和计算样式证明数值；设计用途由 Agent 解释。

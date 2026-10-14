@@ -48,7 +48,6 @@ CSS 值为单个属性值，不能携带其他声明或外部资源地址。
 components 包含 name、kind、description、status、nameStatus、evidenceIds、
 styles、text、state、viewport；kind 为 button/input/navigation/card/text。
 styles 为 camelCase CSS 对象；实测组件保持原始 styles，补充组件标 proposed。
-预览使用部分视觉属性重建，不克隆固定定位、业务或外部媒体。
 组件交付用 role、description 与样式组合的自然语言说明；原始 styles 保存在数据与证据中，不倒入文档 JSON 块。
 
 ## 布局用途
