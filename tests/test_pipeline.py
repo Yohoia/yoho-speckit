@@ -16,8 +16,10 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from common import ingest, coverage, read_json, write_json, plan_for, index_for, local_file
 from design import init_run, doctor
-from model import build, validate_model, validate_value
-from exporter import export, verify, css_values, tokens_json
+from model import build, validate_model, validate_value, NARRATIVE_SECTIONS
+from exporter import export, verify, css_values, tokens_json, color_display
+from exporter import display_value
+from colors import to_hex, normalize_css, conversion_info
 from capture_firecrawl import capture, ApiClient, ProviderError, interact_result, download_capture
 
 
@@ -43,6 +45,8 @@ def review(model):
     model['review']['status']='reviewed'
     model['overview']={'tagline':'Fixture reference','description':'Measured fixture style combinations.',
         'status':'inferred','evidenceIds':[model['tokens'][0]['evidenceIds'][0]]}
+    model['sections']={key:[{'text':'Fixture contains only button/text samples; '+title+' cannot be assessed from this scope.',
+        'status':'unknown','evidenceIds':[]}] for key,title in NARRATIVE_SECTIONS}
     return model
 
 
@@ -87,14 +91,155 @@ class PipelineTests(unittest.TestCase):
         model=self.model();export(self.run)
         self.assertEqual(verify(self.run)['status'],'passed')
         gradient=next(t for t in model['tokens'] if t['category']=='gradient')
-        self.assertEqual(json.loads(tokens_json(model))['gradient'][gradient['name']]['$value'],gradient['value'])
+        self.assertEqual(json.loads(tokens_json(model))['color'][gradient['name']]['$value'],'linear-gradient(90deg, #ff0000, #0000ff)')
         types=[t for t in model['tokens'] if t['category']=='typography']
         self.assertEqual({t['value']['fontWeight'] for t in types},{'400','500'})
         for t in types:self.assertEqual(css_values(model)['--text-'+t['name']+'-line-height'],'24px')
 
+    def test_rgb_colors_export_as_hex_and_preserve_computed_evidence(self):
+        obs=observation()
+        for element in obs['elements']:
+            element['styles']['color']='rgb(41, 122, 58)'
+            element['styleDeclarations']={'color':'#297a3a'}
+        obs['sourceRules']=[{'selector':'#primary, #secondary','href':'fixture.css','context':'','values':{'color':'#297a3a'}}]
+        ingest(self.run,obs,'browser','desktop')
+        _,model=build(self.run);review(model);write_json(self.run/'design.json',model)
+        export(self.run)
+        token=next(item for item in model['tokens'] if item['category']=='color' and item['value']=='rgb(41, 122, 58)')
+        exported=json.loads((self.run/'design-tokens.json').read_text(encoding='utf-8'))
+        entry=exported['color'][token['name']]
+        self.assertEqual(entry['$value'],'#297a3a')
+        self.assertEqual(entry['$extensions']['org.yoho-design-extractor']['computedValue'],'rgb(41, 122, 58)')
+        self.assertEqual(entry['$extensions']['org.yoho-design-extractor']['displayValue'],'#297a3a')
+        source=entry['$extensions']['org.yoho-design-extractor']['sourceDeclarations'][0]
+        self.assertEqual((source['method'],source['property'],source['value']),('css-declaration','color','#297a3a'))
+        self.assertIn('#297a3a',(self.run/'DESIGN.md').read_text(encoding='utf-8'))
+        self.assertIn('#297a3a',(self.run/'tokens.css').read_text(encoding='utf-8'))
+        self.assertNotIn('rgb(41, 122, 58)',(self.run/'tokens.css').read_text(encoding='utf-8'))
+        self.assertIn('"displayValue": "#297a3a"',(self.run/'preview.html').read_text(encoding='utf-8'))
+        self.assertEqual(color_display('rgba(0, 0, 0, 0.08)'),'#00000014')
+
+    def test_rgb_modern_syntax_alpha_and_hex_normalization(self):
+        for source,expected in [('rgb(41, 122, 58)','#297a3a'),('rgb(41 122 58)','#297a3a'),
+            ('rgb(100% 0% 0% / 50%)','#ff000080'),('rgba(0, 0, 0, 0)','#00000000'),
+            ('#abc','#aabbcc'),('#abcd','#aabbccdd'),('hsl(120 100% 50%)','#00ff00')]:
+            self.assertEqual(to_hex(source),expected)
+
+    def test_oklab_is_a_single_hex_color_not_a_gradient_label(self):
+        for source,expected in [('oklab(0.62795536 0.22486306 0.12584630)','#ff0000'),
+            ('oklab(1 0 0)','#ffffff'),('oklab(0.5 0 0)','#636363'),
+            ('oklch(62.795536% 0.25768331 29.233885)','#ff0000'),('color(srgb 0 1 0)','#00ff00')]:
+            self.assertEqual(to_hex(source),expected)
+            self.assertEqual(display_value({'category':'color','value':source}),expected)
+
+    def test_gradient_label_and_executable_hex_stops_stay_separate(self):
+        source='linear-gradient(90deg in oklab, oklab(1 0 0), rgb(41, 122, 58))'
+        self.assertEqual(display_value({'category':'gradient','value':source}),'Gradient')
+        self.assertEqual(normalize_css(source),'linear-gradient(90deg in oklab, #ffffff, #297a3a)')
+        self.assertEqual(normalize_css('rgba(0, 0, 0, 0.5) 0px 2px 4px'),'#00000080 0px 2px 4px')
+        self.assertTrue(conversion_info('oklab(.7 .5 .5)')['gamutClipped'])
+        obs=observation()
+        for element in obs['elements']:
+            element['styles']['color']='oklab(0.5 0 0)'
+            element['styles']['backgroundImage']=source
+        ingest(self.run,obs,'browser','desktop')
+        _,model=build(self.run);review(model);write_json(self.run/'design.json',model)
+        export(self.run)
+        self.assertEqual(verify(self.run)['status'],'passed')
+        exported=json.loads((self.run/'design-tokens.json').read_text())
+        color=next(t for t in model['tokens'] if t['category']=='color' and t['value']=='oklab(0.5 0 0)')
+        gradient=next(t for t in model['tokens'] if t['category']=='gradient')
+        self.assertEqual(exported['color'][color['name']]['$value'],'#636363')
+        self.assertEqual(exported['color'][gradient['name']]['$value'],'linear-gradient(90deg in oklab, #ffffff, #297a3a)')
+        for file in ('tokens.css','tailwind.css','DESIGN.md'):
+            self.assertNotRegex((self.run/file).read_text(),r'\b(?:rgba?|lab|oklab|oklch)\(')
+        self.assertIn('Gradient',(self.run/'DESIGN.md').read_text())
+
     def test_unreviewed_candidate_cannot_be_delivered(self):
         ingest(self.run,observation(),'browser','desktop');build(self.run)
         with self.assertRaises(ValueError):export(self.run)
+
+    def test_unused_narrative_does_not_block_delivery(self):
+        model=self.model()
+        model['sections']={key:[] for key,title in NARRATIVE_SECTIONS}
+        write_json(self.run/'design.json',model)
+        self.assertEqual(len(export(self.run)),9)
+        self.assertEqual(verify(self.run)['status'],'passed')
+
+    def test_reference_document_structure_and_preview_exclusions(self):
+        model=self.model();export(self.run)
+        expected={'DESIGN.md':['Tokens — Colors','Tokens — Typography','Tokens — Spacing & Shapes',
+            'Components',"Do's and Don'ts",'Surfaces','Elevation'],
+            'DESIGN.compact.md':['Colors','Typography','Spacing & Layout','Components',
+            "Do's and Don'ts",'Elevation','Surfaces']}
+        for name in ('DESIGN.md','DESIGN.compact.md'):
+            document=(self.run/name).read_text()
+            self.assertEqual(re.findall(r'^## (.+)$',document,re.M),expected[name])
+            self.assertNotIn('```json',document)
+            self.assertNotIn('| Evidence |',document)
+            self.assertIn('### Type Scale',document)
+            self.assertIn('**Role:**',document)
+            for heading in [title for key,title in NARRATIVE_SECTIONS]+['Coverage & Evidence','Quick Start']:
+                self.assertNotRegex(document,re.compile(r'^## '+re.escape(heading)+r'$',re.M))
+        html=(self.run/'preview.html').read_text()
+        payload=json.loads(html.split('<script id="payload" type="application/json">',1)[1].split('</script>',1)[0])
+        self.assertNotIn('sections',payload['model'])
+        self.assertNotIn('evidence',payload['model'])
+        for id in ('components','narrative','coverage'):
+            self.assertNotIn('id="'+id+'"',html)
+        self.assertEqual(verify(self.run)['status'],'passed')
+
+    def test_all_formats_have_consistent_compact_and_extended_files(self):
+        model=self.model();files=export(self.run)
+        self.assertEqual(len(files),9)
+        compact=json.loads((self.run/'design-tokens.compact.json').read_text())
+        self.assertEqual(set(compact),{'color','font','$extensions'})
+        full=json.loads((self.run/'design-tokens.json').read_text())
+        self.assertIn('typography',full);self.assertIn('spacing',full)
+        for name in ('tokens.compact.css','tailwind.compact.css'):
+            text=(self.run/name).read_text()
+            self.assertIn('--font-',text);self.assertIn('--gradient-',text)
+            self.assertNotIn('--spacing-',text);self.assertNotIn('--text-',text)
+        self.assertIn('--spacing-',(self.run/'tokens.css').read_text())
+        self.assertEqual(verify(self.run)['status'],'passed')
+
+    def test_layout_metrics_require_evidence_and_ranges_stay_out_of_css(self):
+        model=self.model();ref=next(e['id'] for e in model['evidence'] if e['property']=='paddingLeft')
+        model['layoutMetrics']={'cardPadding':{'value':'16px','status':'observed','evidenceIds':[ref]},
+            'sectionGap':{'value':'96-128px','status':'inferred','evidenceIds':[ref]}}
+        write_json(self.run/'design.json',model);export(self.run)
+        self.assertIn('--card-padding: 16px',(self.run/'tokens.css').read_text())
+        self.assertNotIn('--section-gap:',(self.run/'tokens.css').read_text())
+        self.assertIn('96-128px',(self.run/'DESIGN.md').read_text())
+        model['layoutMetrics']['cardPadding']['value']='24px'
+        write_json(self.run/'design.json',model)
+        with self.assertRaisesRegex(ValueError,'实测布局'):export(self.run)
+
+    def test_compact_document_does_not_silently_drop_palette_items(self):
+        obs=observation();sample=obs['elements'][0];obs['elements']=[]
+        for i in range(15):
+            el=copy.deepcopy(sample);el.update(id='e'+str(i+1),selector='#chip-'+str(i))
+            el['styles']['color']='rgb('+str(i)+', 100, 150)';obs['elements'].append(el)
+        ingest(self.run,obs,'browser','desktop');_,model=build(self.run)
+        review(model);write_json(self.run/'design.json',model);export(self.run)
+        for name in ('DESIGN.md','DESIGN.compact.md'):
+            text=(self.run/name).read_text()
+            for i in range(15):self.assertIn(to_hex('rgb('+str(i)+', 100, 150)'),text)
+
+    def test_gradient_name_collision_does_not_overwrite_solid_json_token(self):
+        model=self.model();solid=next(t for t in model['tokens'] if t['category']=='color')
+        gradient=next(t for t in model['tokens'] if t['category']=='gradient')
+        solid['name']=gradient['name']='accent'
+        write_json(self.run/'design.json',model);export(self.run)
+        tokens=json.loads((self.run/'design-tokens.json').read_text())['color']
+        self.assertEqual(tokens['accent']['$value'],to_hex(solid['value']))
+        self.assertIn('gradient(',tokens['gradient-accent']['$value'])
+
+    def test_invalid_palette_group_cannot_silently_hide_color(self):
+        model=self.model();token=next(t for t in model['tokens'] if t['category']=='color')
+        token['paletteGroup']='neutral'
+        write_json(self.run/'design.json',model)
+        with self.assertRaisesRegex(ValueError,'颜色分组'):export(self.run)
 
     def test_export_and_raw_tampering(self):
         self.model();export(self.run)

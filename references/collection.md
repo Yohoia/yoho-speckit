@@ -27,7 +27,7 @@ hover/focus/展开通过宿主浏览器或连接器采集。
 
 ## 元素与样式
 
-共用 assets/probe.js 只读采集 DOM、计算样式、伪元素与可访问样式声明。
+共用 assets/probe.js 只读采集 DOM、计算样式、伪元素、可访问样式声明、元素 inline 声明与样式表声明；导出时保留 computed value 与可匹配 source declaration 的对照。
 它枚举有布局盒的元素，包括视口外元素，默认最多 600 项。
 采样截断时增加 maxElements 或定向分段，不能声称完整。
 选择器是本次快照坐标，不保证网站改版后稳定。

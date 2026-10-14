@@ -39,13 +39,15 @@ CLI 安装需要 Node.js。手动安装时，把仓库根目录复制为 Agent �
 | 文件 | 用途 |
 | --- | --- |
 | `DESIGN.md` / `DESIGN.compact.md` | 完整与精简设计参考 |
-| `tokens.css` | CSS Variables |
-| `tailwind.css` | Tailwind v4 主题与额外变量 |
-| `design-tokens.json` | 面向 CSS 的 Design Tokens 交换文件 |
+| `tokens.css` / `tokens.compact.css` | CSS Variables：完整分类 / 颜色与字体 |
+| `tailwind.css` / `tailwind.compact.css` | Tailwind v4：完整主题 / 颜色与字体 |
+| `design-tokens.json` / `design-tokens.compact.json` | 面向 CSS 的 Design Tokens：完整 / 精简分类 |
 | `preview.html` | 双栏样式参考，切换格式、复制与下载 |
 | `design.json` / `evidence/` | 可编辑数据、原始观察、截图与覆盖记录 |
 
 预览内嵌数据，无需远程脚本、CDN 或 Tailwind；可在允许打开本地文件的浏览器中使用。验证结果记录于 `verification.json`，导出清单记录于 `export-manifest.json`。
+
+预览左侧依次为标题与简介、Color Palette、Typography、Spacing & Shape、Guidelines；四种格式都可切换 Compact/Extended。文档按字体、字号和间距用途分组，组件使用自然语言说明；Extended 到 Elevation、Compact 到 Surfaces 结束。证据与未确认项保留在独立数据文件中。
 
 ## 采集方式
 
@@ -56,6 +58,8 @@ DOM 计算样式与源 CSS 声明保留测量依据，Agent 解释名称、用�
 核心需要 **Python 3.10+**，只使用标准库。采集需要至少一条可用路线：能读取 DOM 与计算样式的宿主浏览器、Firecrawl 连接器、已有 CLI，或 HTTP API。API 路线无需安装 Firecrawl CLI/SDK。
 
 修改 `design.json` 后重新导出。再次 `build` 生成候选，保留已有人工解释；采集失败保留成功快照，可恢复后继续。操作细节见 [主流程](SKILL.md) 与 [交付规范](references/delivery.md)。
+
+单色导出统一使用 hex，透明色保留 alpha；Oklab 等单色转换为 sRGB hex。渐变在预览与文档表格中显示 `Gradient`，CSS 和 JSON 中保留可执行定义与 hex 色标。原始颜色表达留在证据中；宽色域转换的裁剪会另行标记。
 
 <details>
 <summary>可选：配置 Firecrawl API 凭据</summary>

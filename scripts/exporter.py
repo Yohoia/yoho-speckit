@@ -2,9 +2,18 @@
 import json
 from pathlib import Path
 from model import TYPE_PROPS, safe_css, validate_model
-from common import digest, read_json, write_json
+from common import digest, local_file, read_json, write_json
+from colors import to_hex, normalize_css, conversion_info
+from reference import metric_css, presentation
+from documents import document
 
-LABELS = dict(observed='实测', inferred='推断', proposed='补全提案', unknown='未知')
+COMPACT_FILES = {'DESIGN.md':'DESIGN.compact.md','tokens.css':'tokens.compact.css',
+    'tailwind.css':'tailwind.compact.css','design-tokens.json':'design-tokens.compact.json'}
+
+
+def selected_tokens(model, compact=False):
+    return [t for t in model['tokens'] if not compact or t['category'] in {'color','gradient','font'}]
+
 CSS_GROUP = dict(color='color', gradient='gradient', font='font', typography='text',
                  spacing='spacing', radius='radius', shadow='shadow', surface='surface')
 SUFFIX = dict(fontFamily='font-family', fontSize='font-size', fontWeight='font-weight',
@@ -12,27 +21,123 @@ SUFFIX = dict(fontFamily='font-family', fontSize='font-size', fontWeight='font-w
     fontVariationSettings='font-variation-settings', textTransform='text-transform')
 
 
+
+PROPERTY_ALIASES = {
+    'color': ('color',), 'backgroundColor': ('background-color', 'background'),
+    'backgroundImage': ('background-image', 'background'),
+    'borderTopColor': ('border-top-color', 'border-top'), 'borderRightColor': ('border-right-color', 'border-right'),
+    'borderBottomColor': ('border-bottom-color', 'border-bottom'), 'borderLeftColor': ('border-left-color', 'border-left'),
+    'borderTopLeftRadius': ('border-top-left-radius',), 'borderTopRightRadius': ('border-top-right-radius',),
+    'borderBottomRightRadius': ('border-bottom-right-radius',), 'borderBottomLeftRadius': ('border-bottom-left-radius',),
+    'boxShadow': ('box-shadow',), 'fontFamily': ('font-family', 'font'),
+    'fontSize': ('font-size', 'font'), 'fontWeight': ('font-weight', 'font'),
+    'lineHeight': ('line-height',), 'letterSpacing': ('letter-spacing',),
+    'fontFeatureSettings': ('font-feature-settings',), 'fontVariationSettings': ('font-variation-settings',),
+    'textTransform': ('text-transform',)
+}
+
+
+def color_display(value):
+    """Use one serializer for legacy/modern RGB and Oklab color values."""
+    return to_hex(value)
+
+
+def export_value(token):
+    if token.get('category') in {'color','surface','gradient','shadow'}:
+        return normalize_css(token.get('value'))
+    return token.get('value')
+
+
+def display_value(token):
+    if token.get('category')=='gradient':return 'Gradient'
+    return export_value(token)
+
+
+def css_values_equal(a, b, category):
+    if a == b: return True
+    if category in {'color', 'surface'}: return color_display(a) == color_display(b)
+    return False
+
+
+def _source_candidates(evidence, element, token, observation):
+    properties = PROPERTY_ALIASES.get(evidence.get('property'), (evidence.get('property'),))
+    expected = token.get('value')
+    matches = []
+    if element and element.get('styleDeclarations'):
+        for source_property, declared in element['styleDeclarations'].items():
+            if source_property in properties and css_values_equal(expected, declared, token.get('category')):
+                matches.append({'method':'inline-style','selector':evidence['selector'],'property':source_property,
+                    'value':declared,'computedValue':expected})
+    for index, rule in enumerate(observation.get('sourceRules', [])):
+        values = rule.get('values', {})
+        for source_property, declared in values.items():
+            if source_property not in properties or not css_values_equal(expected, declared, token.get('category')):
+                continue
+            exact_selector = any(part.strip() == evidence.get('selector') for part in rule.get('selector', '').split(','))
+            matches.append({'method':'css-declaration','sourceRuleIndex':index,'selector':rule.get('selector',''),
+                'property':source_property,'value':declared,'computedValue':expected,'href':rule.get('href',''),
+                'context':rule.get('context',''), '_exact_selector': exact_selector})
+    matches.sort(key=lambda item: not item.get('_exact_selector', False))
+    for item in matches: item.pop('_exact_selector', None)
+    unique, seen = [], set()
+    for item in matches:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen: continue
+        seen.add(key); unique.append(item)
+        if len(unique) >= 3: break
+    return unique
+
+
+def attach_source_declarations(model, run):
+    """Add best-effort original CSS/inline declarations without rewriting computed evidence."""
+    rows = {row['id']: row for row in model.get('coverage', {}).get('snapshots', [])}
+    observations = {}
+    for snapshot_id, row in rows.items():
+        observations[snapshot_id] = read_json(local_file(run, row['file']))
+    evidence_by_id = {item.get('id'): item for item in model.get('evidence', [])}
+    for token in model.get('tokens', []):
+        candidates = []
+        for evidence_id in token.get('evidenceIds', []):
+            evidence = evidence_by_id.get(evidence_id)
+            if not evidence: continue
+            observation = observations.get(evidence.get('snapshotId'))
+            if not observation: continue
+            element = next((el for el in observation.get('elements', []) if el.get('id') == evidence_id.split(':')[1]), None)
+            candidates.extend(_source_candidates(evidence, element, token, observation))
+        unique, seen = [], set()
+        for item in candidates:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+            if key in seen: continue
+            seen.add(key); unique.append(item)
+            if len(unique) >= 3: break
+        if unique: token['sourceDeclarations'] = unique
+    return model
+
 def variable(token):
     return '--' + CSS_GROUP[token['category']] + '-' + token['name']
 
 
-def css_values(model):
+def css_values(model, compact=False):
     values = {}
-    for token in model['tokens']:
+    for token in selected_tokens(model,compact):
         base = variable(token)
         if token['category'] == 'typography':
             for prop in TYPE_PROPS: values[base + '-' + SUFFIX[prop]] = safe_css(token['value'][prop])
-        else: values[base] = safe_css(token['value'])
+        else: values[base] = safe_css(export_value(token))
+    if not compact:
+        for key,value in metric_css(model).items():
+            if key in values and values[key]!=value:raise ValueError('布局变量与 Token 冲突：'+key)
+            values[key]=value
     return values
 
 
-def css(model):
-    return ':root {\n' + '\n'.join('  ' + k + ': ' + v + ';' for k,v in css_values(model).items()) + '\n}\n'
+def css(model, compact=False):
+    return ':root {\n' + '\n'.join('  ' + k + ': ' + v + ';' for k,v in css_values(model,compact).items()) + '\n}\n'
 
 
-def tailwind(model):
+def tailwind(model, compact=False):
     theme, extra = {}, {}
-    for t in model['tokens']:
+    for t in selected_tokens(model,compact):
         if t['category'] == 'typography':
             base = variable(t)
             theme[base] = t['value']['fontSize']
@@ -41,9 +146,10 @@ def tailwind(model):
             for prop in ('fontFamily','fontFeatureSettings','fontVariationSettings','textTransform'):
                 extra[base + '-' + SUFFIX[prop]] = t['value'][prop]
         elif t['category'] in {'gradient','surface'}:
-            extra[variable(t)] = t['value']
+            extra[variable(t)] = export_value(t)
         else:
-            theme[variable(t)] = t['value']
+            theme[variable(t)] = export_value(t)
+    if not compact:extra.update(metric_css(model))
     result = '/* Import with Tailwind v4; fonts are declared stacks, not bundled font files. */\n@theme {\n'
     result += '\n'.join('  ' + k + ': ' + v + ';' for k,v in theme.items()) + '\n}\n'
     if extra:
@@ -52,90 +158,53 @@ def tailwind(model):
     return result
 
 
-def tokens_json(model):
+def tokens_json(model, compact=False):
     result = {}
-    for t in model['tokens']:
-        result.setdefault(t['category'], {})[t['name']] = {
-            '$value': t['value'], '$type': t['type'], '$description': t.get('role') or t['label'],
+    reserved={t['name'] for t in model['tokens'] if t['category']=='color'}
+    for t in selected_tokens(model,compact):
+        group='color' if t['category']=='gradient' else t['category']
+        name=t['name']
+        if t['category']=='gradient':
+            while name in reserved:name='gradient-'+name
+            reserved.add(name)
+        result.setdefault(group, {})[name] = {
+            '$value': export_value(t), '$type': t['type'], '$description': t.get('role') or t['label'],
             '$extensions': {'org.yoho-design-extractor': {'status':t['status'],
-                'nameStatus':t.get('nameStatus','inferred'), 'evidenceIds':t['evidenceIds'], 'cssVariable':variable(t)}}}
+                'nameStatus':t.get('nameStatus','inferred'), 'evidenceIds':t['evidenceIds'], 'cssVariable':variable(t),
+                'sourceCategory':t['category'],
+                'computedValue':t['value'], 'displayValue':display_value(t),
+                'normalization':conversion_info(t['value']) if t['category'] in {'color','surface','gradient','shadow'} else {},
+                'sourceDeclarations':t.get('sourceDeclarations', [])}}}
     result['$extensions'] = {'org.yoho-design-extractor': {
         'url':model['sourceUrl'],'siteName':model['siteName'],'extractedAt':model['generatedAt'],
         'format':'CSS-oriented token exchange; importer conformance is not asserted',
-        'pageCount':model['coverage']['pageCount']}}
+        'pageCount':model['coverage']['pageCount'],'variant':'compact' if compact else 'extended'}}
+    if not compact:result['$extensions']['org.yoho-design-extractor']['layoutMetrics']=model.get('layoutMetrics',{})
     return json.dumps(result, ensure_ascii=False, indent=2) + '\n'
 
 
-def cell(value):
-    return str(value).replace('|','\\|').replace('\n',' ').replace('`','\\`')
-
-
-def text_item(item):
-    return item.get('text') or item.get('description') or item.get('name') or '尚未解释'
-
-
 def markdown(model, compact=False):
-    overview = model['overview']
-    lines = ['# ' + model['siteName'] + ' — Style Reference',
-        '> ' + (overview.get('tagline') or '基于已采页面的样式参考'), '',
-        '来源：' + model['sourceUrl'], '',
-        '测量值来自 DOM；名称和用途可能为推断；HTML 样本是重建示例。',
-        '字体栈为声明/计算结果，不保证字体文件已随产物分发。', '',
-        '**摘要状态：** ' + LABELS[overview['status']], '', overview.get('description') or '摘要待依据证据解释。', '']
-    titles = [('color','Colors'),('gradient','Gradients'),('font','Typography — Fonts'),
-              ('typography','Typography — Type Scale'),('spacing','Spacing & Shapes — Spacing'),
-              ('radius','Spacing & Shapes — Border Radius'),('shadow','Elevation'),('surface','Surfaces')]
-    for category, title in titles:
-        rows = [t for t in model['tokens'] if t['category'] == category]
-        if compact: rows = rows[:12]
-        lines += ['## ' + ('' if compact else 'Tokens — ') + title, '']
-        if not rows: lines += ['未在已采范围确认。','']; continue
-        lines += ['| Name | Value | Token | Role | Evidence |','|---|---|---|---|---|']
-        for t in rows:
-            value = json.dumps(t['value'],ensure_ascii=False) if isinstance(t['value'],dict) else t['value']
-            refs = ', '.join(t['evidenceIds'][:2])
-            lines.append('| ' + ' | '.join(cell(v) for v in (t['label'],value,variable(t),t.get('role') or '用途待解释',LABELS[t['status']] + ': ' + refs)) + ' |')
-        lines.append('')
-    lines += ['## Components','']
-    for c in model['components']:
-        lines += ['### ' + c['name'], '', '**状态：** ' + LABELS[c['status']] + ' · ' + c.get('state','未指定') + ' · ' + c.get('viewport','未指定'),
-            '', c.get('description') or '用途待依据源证据解释。', '', 'Evidence: ' + ', '.join(c['evidenceIds']), '']
-        if not compact:
-            lines += ['```json',json.dumps(c.get('styles',{}),ensure_ascii=False,indent=2),'```','']
-    if not model['components']: lines += ['未在已采范围确认代表组件。','']
-    lines += ["## Do's and Don'ts",'']
-    for key,title in (('do','Do'),('dont',"Don't")):
-        lines += ['### ' + title,'']
-        lines += ['- [' + LABELS[x['status']] + '] ' + text_item(x) for x in model['guidelines'][key]] or ['尚未形成有依据的建议。']
-        lines.append('')
-    for key,title in (('imagery','Imagery'),('layout','Layout'),('agentPromptGuide','Agent Prompt Guide'),('signatureRules','Signature Rules'),('similarBrands','Similar Brands')):
-        lines += ['## ' + title,'']
-        lines += ['- [' + LABELS[x['status']] + '] ' + text_item(x) for x in model['sections'][key]] or ['未确认；不根据缺失信息补造规则。']
-        lines.append('')
-    cov = model['coverage']
-    lines += ['## Coverage & Evidence','',f"已采 {cov['pageCount']} 个页面、{cov['snapshotCount']} 个快照。",'']
-    for row in cov['snapshots']:
-        lines.append('- ' + row['url'] + ' · ' + row['viewport'] + ' · ' + row['state'] + ' · ' + row['capturedAt'])
-    lines += ['', '### Gaps','']
-    lines += ['- ' + x for x in cov['gaps']]
-    lines += ['- 缺少计划快照：' + json.dumps(x,ensure_ascii=False) for x in cov['missing']]
-    lines += ['- 采集失败：' + str(x.get('stage')) + ' / ' + str(x.get('code')) for x in cov['failures']]
-    if not compact:
-        lines += ['', '## Quick Start','','### CSS Custom Properties','','```css',css(model).rstrip(),'```','',
-                  '### Tailwind v4','','```css',tailwind(model).rstrip(),'```','']
-    return '\n'.join(lines).rstrip() + '\n'
+    return document(model,compact,variable)
 
 
 def generate(model, run):
     validate_model(model, run)
     if model.get('review',{}).get('status') != 'reviewed' or not model['overview'].get('description'):
         raise ValueError('先完成 Agent 解释，填写摘要并将 review.status 设为 reviewed')
-    files = {'DESIGN.md':markdown(model),'DESIGN.compact.md':markdown(model,True),
-        'tokens.css':css(model),'tailwind.css':tailwind(model),'design-tokens.json':tokens_json(model)}
     css_map = css_values(model)
-    export_model = json.loads(json.dumps(model))
-    for t in export_model['tokens']: t['cssVariable'] = variable(t)
-    payload = {'model':export_model,'files':files,'css':css_map}
+    export_model = attach_source_declarations(json.loads(json.dumps(model)), run)
+    for t in export_model['tokens']:
+        t['cssVariable'] = variable(t)
+        t['displayValue'] = display_value(t)
+        t['exportValue'] = export_value(t)
+        if t['label']==t['value']:t['label']=str(t['displayValue'])
+    files = {'DESIGN.md':markdown(export_model),'DESIGN.compact.md':markdown(export_model,True),
+        'tokens.css':css(model),'tokens.compact.css':css(model,True),
+        'tailwind.css':tailwind(model),'tailwind.compact.css':tailwind(model,True),
+        'design-tokens.json':tokens_json(export_model),'design-tokens.compact.json':tokens_json(export_model,True)}
+    view_model={key:export_model[key] for key in ('siteName','sourceUrl','overview','tokens','guidelines')}
+    payload = {'model':view_model,'files':files,'css':css_map,'compactFiles':COMPACT_FILES,
+        'reference':presentation(export_model)}
     template = (Path(__file__).resolve().parent.parent/'assets'/'preview.html').read_text(encoding='utf-8')
     encoded = json.dumps(payload,ensure_ascii=False).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
     files['preview.html'] = template.replace('__PAYLOAD__',encoded)

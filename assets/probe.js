@@ -57,9 +57,15 @@
       const style = css(el, name);
       if (style.content && !['none', 'normal', '""'].includes(style.content)) pseudos[name] = style;
     }
+    const styleDeclarations = {};
+    for (const name of el.style) {
+      const value = el.style.getPropertyValue(name).trim();
+      if (value) styleDeclarations[name] = value;
+    }
     return { id: 'e' + (index + 1), selector: selector(el), tag,
       role: el.getAttribute('role') || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : ''),
       text, styles: css(el), pseudos,
+      styleDeclarations: Object.keys(styleDeclarations).length ? styleDeclarations : undefined,
       rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
       inViewport: rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
       hasText: !!text, childCount: el.children.length };
@@ -68,7 +74,7 @@
   let declarationCount = 0, declarationsTruncated = false;
   const visit = (rules, href, context = '') => {
     for (const rule of rules) {
-      if (declarationCount >= 3000) { declarationsTruncated = true; return; }
+      if (declarationCount >= 12000) { declarationsTruncated = true; return; }
       if (rule.style) {
         const values = {};
         for (const name of rule.style) {

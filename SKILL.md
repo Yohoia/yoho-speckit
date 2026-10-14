@@ -85,7 +85,8 @@ Firecrawl 脚本自动采 default 状态、导入并清理会话。
 脚本归并实测值和排版组合，不替 Agent 作审美或语义判断。
 阅读 design.json，通过 evidenceIds 回看观察，修改名称、用途和摘要。
 解释标 inferred，补充规则标 proposed，无法验证项标 unknown。
-补充代表组件、布局、意象、Do/Don't 与 Agent Prompt Guide；附来源依据。
+整理代表组件、布局用途字段、表面层级与 Do/Don't；附来源依据。
+不为交付中已排除的叙述章节填占位内容，未知布局字段保持 unknown。
 完成解释后将 review.status 设为 reviewed；导出器拒绝未审核候选。
 字体栈不等于实际渲染字体；单个间距不证明基础网格。
 等色不同义保留语义角色，视口差异保持上下文，渐变和阴影保留完整值。
@@ -101,8 +102,8 @@ Firecrawl 脚本自动采 default 状态、导入并清理会话。
 <python> <skill>/scripts/design.py verify --run <run-directory>
 ```
 
-交付 DESIGN.md、DESIGN.compact.md、tokens.css、tailwind.css、design-tokens.json、
-preview.html、design.json 与 evidence/。
+交付四格式的 Extended/Compact 文件、preview.html、design.json 与 evidence/。
+文件命名与章节范围以交付规范为准，预览左侧只显示四个设计模块。
 浏览器检查桌面与移动、导出切换、复制、下载，并比较代表样本与源证据。
 程序检查类型、引用和导出一致性；视觉质量由浏览器检查与人判断。
 

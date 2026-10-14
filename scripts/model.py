@@ -9,6 +9,9 @@ TYPE_PROPS = ('fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpaci
 LIMITS = dict(color=80, gradient=16, font=16, typography=64, spacing=64, radius=32, shadow=32, surface=48)
 TYPES = dict(color='color', gradient='gradient', font='fontFamily', typography='typography',
              spacing='dimension', radius='dimension', shadow='shadow', surface='color')
+NARRATIVE_SECTIONS = (('imagery','Imagery'),('layout','Layout'),
+    ('agentPromptGuide','Agent Prompt Guide'),('signatureRules','Signature Rules'),
+    ('similarBrands','Similar Brands'))
 LENGTH = re.compile(r'-?(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|%|vh|vw|dvh|dvw|svh|svw|lvh|lvw|ch|ex|vmin|vmax|cqw|cqh|pt|pc|cm|mm|in)$')
 
 
@@ -116,10 +119,11 @@ def build(run):
     if omitted: cov['gaps'].append('Candidate token limits reached; raw observations retain omitted values')
     model = {'schemaVersion':1, 'siteName': observations[0].get('title') or observations[0]['url'],
         'sourceUrl':read_json(run/'plan.json')['originalUrl'], 'generatedAt':now(),
+        'theme':observations[0].get('theme',{}).get('colorScheme') or 'unknown','layoutMetrics':{},
         'overview':{'tagline':'', 'description':'', 'status':'unknown', 'evidenceIds':[]},
         'tokens':tokens, 'components':components,
         'guidelines':{'do':[], 'dont':[]},
-        'sections':{'imagery':[], 'layout':[], 'agentPromptGuide':[], 'signatureRules':[], 'similarBrands':[]},
+        'sections':{key:[] for key,title in NARRATIVE_SECTIONS},
         'coverage':cov, 'evidence':[evidence[k] for k in sorted(used)],
         'notes':['Candidate names and semantic roles require Agent review.',
                  'Computed font stacks do not prove the exact font used for every glyph.',
@@ -178,6 +182,10 @@ def validate_model(model, run):
             raise ValueError('Token 名称必须为小写 kebab-case')
         if token['status'] not in STATUS:
             raise ValueError('Token 证据状态无效')
+        if 'paletteGroup' in token and token['paletteGroup'] not in {'brand','accent','neutrals'}:
+            raise ValueError('颜色分组无效；不能隐藏未匹配分组的 Token')
+        if 'level' in token and (type(token['level']) is not int or token['level']<0):
+            raise ValueError('表面层级必须是非负整数；未知时省略')
         value = token['value']
         validate_value(token['category'],value)
         cited = token.get('evidenceIds', [])
@@ -185,6 +193,17 @@ def validate_model(model, run):
         if token['status'] == 'observed' and (not cited or any(refs[x]['value'] != value for x in cited)):
             raise ValueError('实测 Token 没有等值原始证据')
     narrative = [model['overview']] + model.get('components', [])
+    metrics=model.get('layoutMetrics',{})
+    if not isinstance(metrics,dict) or set(metrics)-{'density','baseUnit','pageMaxWidth','sectionGap','cardPadding','elementGap'}:
+        raise ValueError('布局字段无效')
+    for key,item in metrics.items():
+        if not isinstance(item,dict):raise ValueError('布局字段需要带状态与证据的对象')
+        safe_css(item.get('value'))
+        if item.get('status')=='observed':
+            cited=item.get('evidenceIds',[])
+            if not cited or any(x not in refs or refs[x]['value']!=item['value'] for x in cited):
+                raise ValueError('实测布局字段没有等值原始证据')
+    narrative+=list(metrics.values())
     narrative += [x for items in model['guidelines'].values() for x in items]
     narrative += [x for items in model['sections'].values() for x in items]
     for item in narrative:
