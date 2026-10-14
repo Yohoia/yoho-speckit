@@ -382,13 +382,13 @@ class PipelineTests(unittest.TestCase):
         self.assertNotEqual(old['file'],new['file']);self.assertNotEqual(old['screenshot'],new['screenshot'])
         self.assertEqual(local_file(self.run,old['screenshot']).read_bytes(),old_image)
 
-    def test_missing_dependency_and_completed_resume(self):
+    def test_missing_dependency_and_legacy_configuration_requires_capture(self):
         with patch('capture.shutil.which',return_value=None):self.assertFalse(browser_doctor()['ready'])
         with patch('capture.doctor',return_value={'ready':False}):
             with self.assertRaisesRegex(ValueError,'Node.js'):capture(self.run)
         self.model()
-        with patch('capture.doctor',side_effect=AssertionError('must not start browser')):
-            self.assertEqual(capture(self.run,checkpoints=1)['status'],'unchanged')
+        with patch('capture.doctor',return_value={'ready':False}):
+            with self.assertRaisesRegex(ValueError,'Node.js'):capture(self.run,checkpoints=1)
 
     def test_changed_viewport_is_not_reused_as_completed(self):
         self.model();plan=plan_for(self.run);plan['viewports'][1]['width']=400;write_json(self.run/'plan.json',plan)

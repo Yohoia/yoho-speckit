@@ -27,8 +27,10 @@
       u.hash = ''; return u.href;
     } catch { return null; }
   };
+  const selectorCache=new WeakMap();
   const selector = el => {
-    if (el.id && document.querySelectorAll('#' + CSS.escape(el.id)).length === 1) return '#' + CSS.escape(el.id);
+    if(selectorCache.has(el))return selectorCache.get(el);
+    if (el.id && document.querySelectorAll('#' + CSS.escape(el.id)).length === 1) {const value='#'+CSS.escape(el.id);selectorCache.set(el,value);return value;}
     const parts = [];
     for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
       const name = n.tagName.toLowerCase();
@@ -36,7 +38,7 @@
       parts.unshift(name + ':nth-child(' + index + ')');
       if (n === document.documentElement) break;
     }
-    return parts.join(' > ');
+    const value=parts.join(' > ');selectorCache.set(el,value);return value;
   };
   const css = (el, pseudo) => {
     const computed = getComputedStyle(el, pseudo);
@@ -67,7 +69,11 @@
       const value = el.style.getPropertyValue(name).trim();
       if (value) styleDeclarations[name] = value;
     }
-    return { id: 'e' + (index + 1), selector: selector(el), tag,
+    const ancestors=[];for(let parent=el.parentElement;parent;parent=parent.parentElement)ancestors.push(selector(parent));
+    const buttonLike=tag==='a' && (el.getAttribute('role')==='button' || el.matches('[class*=button],[class*=btn]') ||
+      (getComputedStyle(el).backgroundColor!=='rgba(0, 0, 0, 0)' && parseFloat(getComputedStyle(el).paddingLeft)>0));
+    return { id: 'e' + (index + 1), selector: selector(el), tag, ancestorSelectors:ancestors,
+      componentHint:buttonLike?'button':undefined,
       role: el.getAttribute('role') || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : ''),
       text, styles: css(el), pseudos,
       styleDeclarations: Object.keys(styleDeclarations).length ? styleDeclarations : undefined,

@@ -49,6 +49,12 @@ def main(argv=None):
     start.add_argument('--max-pages',type=int)
     for name in ('check-plan','coverage','build','export','verify'):
         cmd = sub.add_parser(name);cmd.add_argument('--run',required=True)
+    cmd=sub.add_parser('compact',help='无损压缩已有证据并更新模型路径，保留原文件');cmd.add_argument('--run',required=True)
+    cmd=sub.add_parser('clean',help='引用检查后清理未使用证据；默认dry-run');cmd.add_argument('--run',required=True)
+    cmd.add_argument('--apply',action='store_true');cmd.add_argument('--keep-history',type=int)
+    cmd=sub.add_parser('inspect',help='有界读取压缩/旧观察');cmd.add_argument('--run',required=True);cmd.add_argument('--snapshot',required=True)
+    cmd.add_argument('--selector');cmd.add_argument('--sha256');cmd.add_argument('--field',choices=['summary','elements','sourceRules','sourceVariables'],default='summary')
+    cmd.add_argument('--offset',type=int,default=0);cmd.add_argument('--limit',type=int,default=20)
     incoming=sub.add_parser('capture',help='唯一本地 Chrome/CDP 采集入口')
     incoming.add_argument('--run',required=True);incoming.add_argument('--url');incoming.add_argument('--viewport')
     incoming.add_argument('--state',choices=['default','hover','focus'],default='default');incoming.add_argument('--selector')
@@ -68,6 +74,28 @@ def main(argv=None):
         elif args.command == 'build':
             from model import build
             path, model = build(args.run);result = {'status':'created','file':str(path),'tokens':len(model['tokens']),'components':len(model['components'])}
+        elif args.command in {'compact','clean'}:
+            from storage import compact, clean
+            result=compact(args.run) if args.command=='compact' else clean(args.run,args.apply,args.keep_history)
+        elif args.command=='inspect':
+            from common import index_for, local_file
+            if not 1<=args.limit<=100 or args.offset<0:raise ValueError('limit须为1–100，offset须非负')
+            index=index_for(args.run)
+            row=next((r for r in index['snapshots']+index.get('history',[]) if r['id']==args.snapshot and (not args.sha256 or r['sha256']==args.sha256)),None)
+            if not row:raise ValueError('快照不存在')
+            obs=read_json(local_file(args.run,row['file']))
+            if args.field=='summary' and not args.selector:
+                result={k:v for k,v in obs.items() if k not in {'elements','sourceRules','sourceVariables','rootVariables'}}
+                result['counts']={k:len(obs.get(k,[])) for k in ('elements','sourceRules','sourceVariables')}
+            else:
+                field='elements' if args.selector else args.field;items=obs.get(field,[])
+                if args.selector:items=[e for e in items if e['selector']==args.selector]
+                bounded=[]
+                for item in items[args.offset:args.offset+args.limit]:
+                    item=dict(item)
+                    if 'matchedRules' in item:item['matchedRuleCount']=len(item['matchedRules']);item['matchedRules']=item['matchedRules'][:args.limit]
+                    bounded.append(item)
+                result={'field':field,'total':len(items),'offset':args.offset,'items':bounded,'truncated':len(items)>args.offset+args.limit}
         elif args.command == 'export':
             from exporter import export
             result = {'status':'exported','files':export(args.run)}

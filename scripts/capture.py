@@ -4,8 +4,10 @@ import json
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
-from common import coverage, evidence_lock, index_for, ingest, local_file, now, origin, plan_for, read_json, snapshot_key, url, write_json
+from ledger import register_requests, resolve_failures
+from common import coverage, digest, evidence_lock, index_for, _ingest, local_file, now, origin, plan_for, read_json, snapshot_key, url, write_json
 
 
 def doctor():
@@ -44,10 +46,11 @@ def commit_snapshot(run, stage, row, refresh=False):
         temp.write(image);shot=Path(temp.name)
     try:
         # Source files are content-addressed. Failed ingest leaves the previous snapshot intact.
-        for target,data in pending:
-            target.parent.mkdir(parents=True,exist_ok=True)
-            if not target.exists():target.write_bytes(data)
-        return ingest(run,observation,'local-cdp',row['viewport'],row['state'],row['url'],shot.relative_to(run).as_posix(),refresh)
+        with evidence_lock(run):
+            for target,data in pending:
+                target.parent.mkdir(parents=True,exist_ok=True)
+                if not target.exists():target.write_bytes(data)
+            return _ingest(run,observation,'local-cdp',row['viewport'],row['state'],row['url'],shot.relative_to(run).as_posix(),refresh)
     finally:shot.unlink(missing_ok=True)
 
 
@@ -61,26 +64,40 @@ def capture(run, target=None, viewport=None, state='default', selector=None, ref
     if any(p not in plan['pages'] for p in pages):raise ValueError('URL 不在计划内')
     views=[v for v in plan['viewports'] if not viewport or v['name']==viewport]
     if not views:raise ValueError('视口不在计划内')
+    current=coverage(run)
     existing={row['id']:row for row in index_for(run)['snapshots']}
     snapshot_state=state if state=='default' else state+'-'+hashlib.sha256(selector.encode()).hexdigest()[:10]
     states=[snapshot_state]+(['scroll-'+str(i).zfill(2) for i in range(1,checkpoints)] if state=='default' else [])
-    jobs=[];changed=set()
+    active={row['id']:row for row in current['snapshots']}
+    failures=current['failures'];jobs=[];changed=set();requests=[]
     for page in pages:
         for view in views:
-            missing=False
+            config={'collectorVersion':2,'width':view['width'],'height':view['height'],'maxElements':max_elements,
+                'maxMatched':max_matched,'checkpoints':checkpoints if state=='default' else 1,'maxSteps':24,
+                'state':snapshot_state,'selector':selector if state!='default' else None}
+            sha=digest(config)
+            pending=any((f.get('url')==page and f.get('viewport')==view['name'] and f.get('state') in states) or
+                any(t['url']==page and t['viewport']==view['name'] and t['state'] in states for t in f.get('tasks',[]))
+                for f in failures if f.get('stage')!='cleanup')
+            missing=refresh or pending
             for label in states:
-                key=snapshot_key(page,view['name'],label);row=existing.get(key)
-                if not row:missing=True;continue
-                old=read_json(local_file(run,row['file']))
-                if any(abs(old['viewport'][k]-view[k])>1 for k in ('width','height')):
-                    missing=True;changed.add(key)
-            if refresh or missing:jobs.append({'url':page,'viewport':view['name'],'width':view['width'],
-                'height':view['height'],'state':state,'snapshotState':snapshot_state,'selector':selector})
+                key=snapshot_key(page,view['name'],label);row=active.get(key)
+                if not row or row.get('configSha256')!=sha:missing=True;changed.add(key)
+            request={'url':page,'viewport':view['name'],'state':snapshot_state,'states':states,'config':config}
+            requests.append(request)
+            if missing:
+                if refresh or pending:changed.update(snapshot_key(page,view['name'],label) for label in states)
+                jobs.append({'url':page,'viewport':view['name'],'width':view['width'],'height':view['height'],
+                    'state':state,'snapshotState':snapshot_state,'selector':selector,'captureConfig':config})
     if not jobs:
-        coverage(run)  # Do not reuse an index whose observations/images/CSS were corrupted.
-        return {'status':'unchanged','message':'计划坐标已采集'}
+        resolve_failures(run)
+        return {'status':'unchanged','message':'当前配置与计划坐标已采集','saved':0,'reused':len(states)*len(pages)*len(views),
+                'failures':coverage(run)['failures']}
     environment=doctor()
     if not environment['ready']:raise ValueError('需要 Node.js 22+ 和 Chrome/Chromium；先运行 doctor，必要时配置 SPECKIT_CHROME_PATH')
+    register_requests(run,requests)
+    attempt_id=uuid.uuid4().hex
+    for job in jobs:job['attemptId']=attempt_id
     allowed=[origin(plan['originalUrl'])]+[origin(p) for p in plan.get('authorizedOrigins',[])]
     allowed_urls=[scheme+'://'+('['+host+']' if ':' in host else host)+(':'+str(port) if port!=(443 if scheme=='https' else 80) else '') for scheme,host,port in allowed]
     with tempfile.TemporaryDirectory(prefix='speckit-capture-') as directory:
@@ -104,8 +121,15 @@ def capture(run, target=None, viewport=None, state='default', selector=None, ref
                 saved.append(commit_snapshot(run,stage,row,refresh or key in changed))
             except (OSError,KeyError,ValueError) as error:result['failures'].append({**row,'stage':'commit','message':str(error)})
         if cancelled or timed_out or (proc.returncode and not result['failures']):
-            result['failures'].append({'stage':'browser','message':'Capture cancelled' if cancelled else 'Browser timeout' if timed_out else (stderr.strip()[:500] or 'Browser failed')})
-        for failure in result['failures']:record_failure(run,failure)
+            tasks=[{'url':job['url'],'viewport':job['viewport'],'state':label,'configSha256':digest(job['captureConfig'])}
+                for job in jobs for label in states]
+            result['failures'].append({'stage':'browser','attemptId':attempt_id,'tasks':tasks,
+                'message':'Capture cancelled' if cancelled else 'Browser timeout' if timed_out else (stderr.strip()[:500] or 'Browser failed')})
+        for failure in result['failures']:
+            job=next((j for j in jobs if j['url']==failure.get('url') and j['viewport']==failure.get('viewport')),None)
+            if job and 'tasks' not in failure:failure['tasks']=[{'url':job['url'],'viewport':job['viewport'],'state':failure['state'],'configSha256':digest(job['captureConfig'])}]
+            record_failure(run,{**failure,'attemptId':attempt_id})
+        resolve_failures(run)
         cov=coverage(run);write_json(run/'evidence'/'coverage.json',cov)
-        return {'status':'partial' if result['failures'] else 'captured','cancelled':cancelled,'saved':len(saved),
+        return {'status':'partial' if result['failures'] else 'captured','cancelled':cancelled,'saved':sum(row['status']=='saved' for row in saved),'reused':sum(row['status']=='unchanged' for row in saved),
             'pages':cov['pageCount'],'snapshots':cov['snapshotCount'],'failures':result['failures']}

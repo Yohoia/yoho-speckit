@@ -41,6 +41,8 @@ CSS 值为单个属性值，不能携带其他声明或外部资源地址。
 快照 file 保存完整观察；selector/property 定位元素与原值。
 原始 CSS 声明保存在 sourceRules/sourceVariables，原始文本文件见 stylesheets 的本地路径。
 CDP的matchedRules带来源、范围、继承与伪元素上下文；matched-candidate不证明最终获胜声明。
+祖先规则只作为可继承属性或显式inherit的候选；变量依赖单独回溯其声明。
+新观察先通过inspect或read_json展开共享引用，再按原来的逻辑坐标查找。
 renderedFonts记录代表节点实际字体；fontFamily仍为声明栈。解析后的px不代表源单位。
 声明证据可使用 method=css-declaration、sourceRuleIndex、selector、property、value，
 指向原始 sourceRules 的对应值；不要将声明中未解析的变量当成可独立使用的值。
@@ -51,6 +53,8 @@ components 包含 name、kind、description、status、nameStatus、evidenceIds�
 styles、text、state、viewport；kind 为 button/input/navigation/card/text。
 styles 为 camelCase CSS 对象；实测组件保持原始 styles，补充组件标 proposed。
 组件交付用 role、description 与样式组合的自然语言说明；原始 styles 保存在数据与证据中，不倒入文档 JSON 块。
+组件按相关外观属性归并，相同变体的contexts保存页面/视口/状态证据；styles为首份代表观察，不能用于宣称所有上下文的几何完全相同。
+候选上限64，按上下文均衡选择，omittedComponentCandidates报告遗漏。Agent可有依据补充遗漏，不沿用失效证据。
 
 ## 布局用途
 

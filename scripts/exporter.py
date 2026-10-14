@@ -1,6 +1,7 @@
 """Generate all handoff files from one reviewed model."""
 import base64
 import json
+import re
 from pathlib import Path
 from model import TYPE_PROPS, safe_css, validate_model
 from common import digest, local_file, read_json, write_json
@@ -36,6 +37,8 @@ PROPERTY_ALIASES = {
     'fontFeatureSettings': ('font-feature-settings',), 'fontVariationSettings': ('font-variation-settings',),
     'textTransform': ('text-transform',)
 }
+INHERITED_PROPERTIES={'color','font-family','font-size','font-weight','font','line-height','letter-spacing',
+    'font-feature-settings','font-variation-settings','text-transform','fill','stroke'}
 
 
 def color_display(value):
@@ -68,7 +71,8 @@ def _source_candidates(evidence, element, token, observation):
         for source_property, declared in element['styleDeclarations'].items():
             if source_property in properties:
                 matches.append({'method':'inline-style','selector':evidence['selector'],'property':source_property,
-                    'value':declared,'computedValue':expected,'matchStatus':'inline-candidate'})
+                    'value':declared,'computedValue':expected,'matchStatus':'inline-candidate',
+                    'snapshotId':evidence.get('snapshotId'),'observedSelector':evidence['selector'],'inherited':False,'origin':'inline'})
     if evidence.get('method')=='css-declaration':
         rule=observation['sourceRules'][evidence['sourceRuleIndex']]
         return [{'method':'css-declaration','sourceRuleIndex':evidence['sourceRuleIndex'],
@@ -81,6 +85,7 @@ def _source_candidates(evidence, element, token, observation):
         properties=PROPERTY_ALIASES.get(prop,(prop,))
         rules=[rule for rule in rules if rule.get('pseudo')==pseudo]
     else:rules=[rule for rule in rules if not rule.get('pseudo')]
+    explicit_inherit=any(not r.get('inherited') and any(r.get('values',{}).get(p)=='inherit' for p in properties) for r in rules)
     if not rules:
         rules=[dict(rule,sourceRuleIndex=index) for index,rule in enumerate(observation.get('sourceRules',[]))
             if not rule.get('context') and evidence['selector'] in [x.strip() for x in rule.get('selector','').split(',')]]
@@ -88,14 +93,27 @@ def _source_candidates(evidence, element, token, observation):
         if rule.get('active') is False:continue
         values = rule.get('values', {})
         for source_property, declared in values.items():
+            if rule.get('inherited') and source_property not in INHERITED_PROPERTIES and not explicit_inherit:continue
             if source_property not in properties or ('active' not in rule and not css_values_equal(expected, declared, token.get('category'))):
                 continue
             exact_selector = any(part.strip() == evidence.get('selector') for part in rule.get('selector', '').split(','))
             matches.append({'method':'css-declaration','sourceRuleIndex':rule.get('sourceRuleIndex'),'selector':rule.get('selector',''),
                 'property':source_property,'value':declared,'computedValue':expected,'href':rule.get('href',''),
                 'context':rule.get('context',''),'range':rule.get('range'),
+                'inherited':rule.get('inherited',False),'ancestorSelector':rule.get('ancestorSelector'),
+                'ancestorDepth':rule.get('ancestorDepth'),'pseudo':rule.get('pseudo'),
+                'origin':rule.get('origin'),'styleSheetId':rule.get('styleSheetId'),
+                'matchingSelectors':rule.get('matchingSelectors'),'snapshotId':evidence.get('snapshotId'),
+                'observedSelector':evidence['selector'],
+                'stylesheetFile':next((s['file'] for s in observation.get('stylesheets',[]) if s.get('styleSheetId')==rule.get('styleSheetId') and rule.get('styleSheetId')),None),
                 'matchStatus':'matched-candidate' if 'active' in rule else 'selector-exact-candidate',
                 '_exact_selector': exact_selector})
+            variables=set(re.findall(r'var\(\s*(--[\w-]+)',declared))
+            if variables:
+                matches[-1]['variableDeclarations']=[{'name':name,'value':r['values'][name],
+                    'selector':r.get('selector'),'inherited':r.get('inherited',False),'ancestorSelector':r.get('ancestorSelector'),
+                    'href':r.get('href'),'range':r.get('range'),'origin':r.get('origin')}
+                    for r in (element or {}).get('matchedRules',[]) for name in sorted(variables) if name in r.get('values',{}) and r.get('active') is not False]
     matches.sort(key=lambda item: not item.get('_exact_selector', False))
     for item in matches: item.pop('_exact_selector', None)
     unique, seen = [], set()
@@ -109,7 +127,8 @@ def _source_candidates(evidence, element, token, observation):
 
 def attach_source_declarations(model, run):
     """Add best-effort original CSS/inline declarations without rewriting computed evidence."""
-    rows = {row['id']: row for row in model.get('coverage', {}).get('snapshots', [])}
+    from common import coverage
+    rows = {row['id']: row for row in coverage(run)['snapshots']}
     observations = {}
     for snapshot_id, row in rows.items():
         observations[snapshot_id] = read_json(local_file(run, row['file']))
@@ -255,7 +274,7 @@ def export(run):
     files = generate(model, run)
     from common import coverage
     cov=coverage(run)
-    for key in ('omittedTokenCandidates','rejectedTokenCandidates'):cov[key]=model['coverage'].get(key,{})
+    for key in ('omittedTokenCandidates','rejectedTokenCandidates','omittedComponentCandidates'):cov[key]=model['coverage'].get(key,{})
     for t in model['tokens']:
         if t['category'] in {'color','surface','gradient','shadow'} and conversion_info(t['value'])['status']=='unsupported':
             cov['gaps'].append(t['id']+': color encoding unsupported; original retained')

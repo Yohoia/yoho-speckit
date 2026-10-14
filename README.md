@@ -72,11 +72,11 @@ npx skills add Yohoia/yoho-speckit --skill speckit
 - **来源**：计算样式证明当时的数值；匹配规则是候选，不直接等于层叠获胜声明。字体栈与实际渲染字体分开记录。
 - **覆盖**：Canvas/WebGL、Shadow DOM/iframe及未加载内容可能无法全面测量；不能因此声称恢复了完整官方设计系统。
 - **数据**：证据留在本地，页面正常访问其资源服务器；不将观察发给额外的云端提取服务。原始CSS不被改写，字体文件默认不再分发。
-- **恢复**：原始观察和截图按内容哈希存储，成功后更新账本；失败保留成功坐标。再次build产生候选，保留人工解释。
+- **恢复**：观察使用gzip和共享规则引用，截图/原始CSS内容寻址；配置改变自动重采，历史与当前有效范围分开。失败保留成功文件与任务归属，再次build产生候选，保留人工解释。
 
 只采审核后的公开页面范围。截图为JPEG视觉证据，不作无损像素相等的判据。
 macOS已实测；Windows/Linux的依赖发现已实现，端到端实机未验证。Tailwind文件需要用户已有构建环境，特定设计工具导入未验证。
-详细命令见 [主流程](SKILL.md)、[本地浏览器](references/browser.md) 与 [交付规范](references/delivery.md)。
+详细命令见 [主流程](SKILL.md)、[本地浏览器](references/browser.md)、[交付规范](references/delivery.md) 与 [证据存储](references/storage.md)。
 
 ## 开发与来源
 
@@ -86,7 +86,8 @@ macOS已实测；Windows/Linux的依赖发现已实现，端到端实机未验�
 | `scripts/design.py` | doctor、init、capture、build、export、verify统一入口 |
 | `scripts/capture.py` | 计划、预算、恢复与证据提交 |
 | `scripts/capture_browser.mjs` / `cdp.mjs` | 浏览器采集 / 隔离进程与协议传输 |
-| `scripts/common.py` / `model.py` | 证据账本、候选归并与数据验证 |
+| `scripts/common.py` / `ledger.py` / `model.py` | 证据基础合同、当前范围/任务、候选归并与验证 |
+| `scripts/storage.py` | 无损压缩/共享记录、旧数据迁移与引用保护清理 |
 | `scripts/colors.py` / `reference.py` / `documents.py` / `exporter.py` | 颜色、展示摘要、文档与导出 |
 | `assets/probe.js` | 共用DOM与计算样式探针 |
 | `assets/preview.html` / `preview.css` / `preview.js` | 预览源码；导出时内嵌 |
@@ -99,6 +100,8 @@ python3 -B -m unittest discover -s tests -v
 
 浏览器测试只访问本地fixture；无Node/Chrome时明确skip，不冒充端到端验证。
 `.DS_Store`、`__pycache__/`和临时运行缓存可清理；运行产物与评审报告位于Skill外部。
+
+0.3版将错误主文档、失效页面/视口排除于当前模型，修正组件变体与来源继承，持久化采集配置与任务恢复，并支持无损存储和有界inspect。compact迁移旧观察，clean默认dry-run；历史清理需显式apply，JSON归档和自定义pins保护引用。
 
 0.2版移除了旧版云端和宿主采集分支。旧证据与模型仍可读取，但新采集只走CDP；既存系统凭据不迁移、不删除。
 Design Tokens自有扩展保留历史命名空间 `org.yoho-design-extractor`，以兼容已生成文件。

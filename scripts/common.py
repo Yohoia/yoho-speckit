@@ -1,5 +1,7 @@
 """Shared run contract; no network, credentials or third-party dependencies."""
 import hashlib
+import gzip
+import zlib
 import json
 import os
 import re
@@ -19,11 +21,20 @@ def now():
 
 
 def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    path=Path(path)
+    try:data=json.loads(gzip.decompress(path.read_bytes()) if path.suffix=='.gz' else path.read_text(encoding='utf-8'))
+    except (gzip.BadGzipFile,EOFError,zlib.error) as error:raise ValueError('压缩JSON损坏：'+str(path)) from error
+    if isinstance(data,dict) and (data.get('storageVersion')==1 or data.get('method')=='dom-computed-style'):
+        from storage import expand
+        return expand(path,data)
+    return data
 
 
 def write_json(path, data):
     path = Path(path)
+    if path.suffix=='.gz':
+        from storage import atomic_gzip
+        atomic_gzip(path,data);return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w",encoding="utf-8",dir=path.parent,prefix=path.name+".",suffix=".tmp",delete=False) as handle:
         handle.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
@@ -190,12 +201,15 @@ def _ingest(run, obs, backend, viewport_name, state="default", requested_url=Non
         shot='evidence/screenshots/'+key+'-'+image_hash[:16]+path.suffix
         target=local_file(run,shot);target.parent.mkdir(parents=True,exist_ok=True)
         if not target.exists():target.write_bytes(data)
-    path = run / "evidence" / "observations" / (key + '-' + digest(obs)[:16] + ".json")
-    write_json(path, obs)
+    from storage import store_observation
+    path = store_observation(run,key,obs)
     row = {"id": key, "requestedUrl": requested, "url": url(obs["url"]), "viewport": viewport_name,
            "state": state, "backend": backend, "capturedAt": obs["capturedAt"],
            "file": path.relative_to(run).as_posix(), "sha256": digest(obs), "screenshot": shot,
            "screenshotSha256": hashlib.sha256(local_file(run,shot).read_bytes()).hexdigest() if shot else None}
+    if obs.get('captureConfig'):row['configSha256']=digest(obs['captureConfig'])
+    if obs.get('captureAttempt'):row['attemptId']=obs['captureAttempt']
+    if exists and exists!=row:index.setdefault('history',[]).append(exists)
     for old in index["failures"]:
         if old.get("url") == requested and old.get("viewport") == viewport_name and old.get('state')==state and old.get("stage") != "cleanup":
             old["resolvedAt"] = now()
@@ -205,55 +219,5 @@ def _ingest(run, obs, backend, viewport_name, state="default", requested_url=Non
 
 
 def coverage(run):
-    plan, index = plan_for(run), index_for(run)
-    gaps = list(plan.get("gaps", []))
-    successful = {(x["requestedUrl"], x["viewport"], x["state"]) for x in index["snapshots"]}
-    missing = [{"url": p, "viewport": v["name"], "state": "default"}
-               for p in plan["pages"] for v in plan["viewports"] if (p, v["name"], "default") not in successful]
-    candidates = {}
-    stale=[]
-    for row in index["snapshots"]:
-        obs = read_json(local_file(run, row["file"]))
-        if digest(obs) != row["sha256"]:
-            raise ValueError("证据摘要不一致：" + row["id"])
-        if row.get("screenshot") and hashlib.sha256(local_file(run,row["screenshot"]).read_bytes()).hexdigest() != row.get("screenshotSha256"):
-            raise ValueError("截图摘要不一致：" + row["id"])
-        for sheet in obs.get('stylesheets',[]):
-            if hashlib.sha256(local_file(run,sheet['file']).read_bytes()).hexdigest()!=sheet['sha256']:
-                raise ValueError('原始样式表摘要不一致：'+row['id'])
-        view=next((v for v in plan['viewports'] if v['name']==row['viewport']),None)
-        if not view or any(abs(obs['viewport'][k]-view[k])>1 for k in ('width','height')):
-            stale.append(row['id']);gaps.append(row['id']+': snapshot viewport differs from current plan')
-            if row['state']=='default' and view:
-                item={'url':row['requestedUrl'],'viewport':row['viewport'],'state':'default'}
-                if item not in missing:missing.append(item)
-        for link in obs.get("links", []):
-            try:
-                target = url(link["url"])
-                if origin(target) == origin(plan["originalUrl"]) and target not in plan["pages"]:
-                    candidates[target] = link
-            except (KeyError, ValueError):
-                continue
-        for flag in ("truncated", "declarationsTruncated"):
-            if obs.get("sampling", {}).get(flag): gaps.append(row["id"] + ": " + flag)
-        if obs.get("walkComplete") is False: gaps.append(row["id"] + ": scroll walk incomplete")
-        if obs.get("fontStatus") != "loaded": gaps.append(row["id"] + ": fonts not ready")
-        if obs.get("inaccessibleStylesheets"): gaps.append(row["id"] + ": some stylesheet declarations unreadable")
-        if not row.get("screenshot"): gaps.append(row["id"] + ": screenshot missing")
-        if obs.get("canvasCount"): gaps.append(row["id"] + ": canvas graphics not measured as DOM styles")
-        for gap in obs.get('gaps',[]):gaps.append(row['id']+': '+gap)
-        if obs.get('health',{}).get('failures'):gaps.append(row['id']+': resource failures observed')
-        if obs.get('health',{}).get('errors'):gaps.append(row['id']+': browser errors observed')
-        if obs.get('readiness',{}).get('unloadedImages'):gaps.append(row['id']+': images not ready')
-    kinds={x['state'].split('-')[0] for x in index['snapshots'] if x['id'] not in stale}
-    if not kinds & {'hover','focus','nav'}:
-        gaps.append("Only default states captured; hover/focus/expanded states remain unverified")
-    else:
-        unverified={'hover','focus','expanded'}-kinds
-        if unverified:gaps.append('Unverified interaction kinds: '+', '.join(sorted(unverified)))
-    return {"planSha256":digest(plan),"plannedPages": plan["pages"], "pageCount": len({x["requestedUrl"] for x in index["snapshots"]}),
-            "snapshotCount": len(index["snapshots"]), "snapshots": index["snapshots"],
-            "missing": missing,"staleSnapshots":stale, "failures": [x for x in index["failures"] if not x.get("resolvedAt")],
-            "failureHistory":index["failures"], "gaps": sorted(set(gaps)),
-            "unvisitedCandidates": sorted(candidates.values(), key=lambda x: (not x.get("inNavigation"), x["url"])),
-            "selectionNotes": plan.get("selectionNotes", [])}
+    from ledger import coverage as current_coverage
+    return current_coverage(run)

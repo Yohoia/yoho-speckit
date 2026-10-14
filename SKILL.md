@@ -4,7 +4,7 @@ description: 从网站网址提取有来源依据的设计规范，生成 DESIGN
 license: MIT
 compatibility: Python 3.10+、Node.js 22+、本机 Chrome 或 Chromium；无需 npm 包和云端 API Key。采集固定使用隔离的本地 CDP 浏览器。macOS 已实测；Windows/Linux 依赖发现已实现，端到端未验证。
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # SpecKit
@@ -13,6 +13,7 @@ metadata:
 截图证明构图，计算样式证明观测条件下的数值；用途由 Agent 解释。
 原始声明、匹配候选、实测数值与解释分开保存。
 所有导出来自同一份审核过的 design.json。
+大型证据的有界读取、无损压缩与维护见 [证据存储](references/storage.md)。
 
 ## 1. 检查环境与初始化
 
@@ -64,7 +65,9 @@ doctor 为只读本地检查；ready=true 后继续。
 滚动检查点不是交互状态；只测 hover 也不证明 focus 和展开状态。
 来源是命中候选时保持该标记，不把候选直接说成最终获胜声明。
 真实渲染字体与声明字体栈分别核对，缺少能力时记录 unknown。
-普通重跑复用完成坐标；refresh 在验证新结果后更新账本。
+普通重跑核对视口、采样预算与检查点配置后复用；参数变化自动重采对应坐标。
+历史证据与失效快照不进入当前模型；主文档HTTP错误保存为失败，子资源错误记录缺口。
+refresh 在验证新结果后更新账本。
 旧截图和观察保持可追溯，失败时保留已有成功快照。
 
 ## 4. 整理设计规范

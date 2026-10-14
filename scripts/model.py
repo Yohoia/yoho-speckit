@@ -47,13 +47,13 @@ def validate_value(category, value):
 def build(run):
     run = Path(run)
     cov = coverage(run)
-    index = index_for(run)
+    index = {'snapshots':cov['snapshots']}
     if not index['snapshots']:
         raise ValueError('没有 DOM 实测证据；先采集再 build')
     groups = defaultdict(dict)
     evidence = {}
     components = []
-    component_seen = set()
+    component_groups = {}
     rejected = defaultdict(int)
 
     def add(category, value, row, el, prop):
@@ -103,17 +103,35 @@ def build(run):
                     if nonzero(ps.get(prop)):add('color',ps[prop],row,el,pseudo+'.'+prop)
                 if 'gradient(' in ps.get('backgroundImage',''):add('gradient',ps['backgroundImage'],row,el,pseudo+'.backgroundImage')
                 if nonzero(ps.get('boxShadow')):add('shadow',ps['boxShadow'],row,el,pseudo+'.boxShadow')
-            kind = 'button' if el.get('role') == 'button' else 'input' if el['tag'] in {'input','textarea','select'} else 'navigation' if el['tag'] == 'nav' else None
+            kind = 'button' if el.get('role') == 'button' or el.get('componentHint')=='button' else 'input' if el['tag'] in {'input','textarea','select'} else 'navigation' if el['tag'] == 'nav' else None
             if kind:
-                fingerprint = digest([kind, row['state'], row['viewport'], s.get('backgroundColor'), s.get('borderTopColor'), s.get('borderTopLeftRadius'), s.get('fontSize')])
-                if fingerprint not in component_seen and len(components) < 16:
-                    component_seen.add(fingerprint)
-                    evid = row['id'] + ':' + el['id'] + ':element'
-                    evidence[evid] = {'id':evid,'snapshotId':row['id'],'selector':el['selector'],'property':'element','value':el['selector']}
-                    components.append({'name':kind + ' ' + str(len(components)+1), 'kind':kind,
-                        'description':'', 'status':'observed', 'nameStatus':'inferred',
-                        'evidenceIds':[evid], 'styles':s, 'text':el.get('text') or kind,
-                        'state':row['state'], 'viewport':row['viewport']})
+                appearance={k:v for k,v in s.items() if k not in {'width','height','minWidth','maxWidth','position'}}
+                fingerprint=digest([kind,appearance])
+                evid=row['id']+':'+el['id']+':element'
+                evidence[evid]={'id':evid,'snapshotId':row['id'],'selector':el['selector'],'property':'element','value':el['selector']}
+                component=component_groups.setdefault(fingerprint,{'name':kind+' '+fingerprint[:8],'kind':kind,
+                    'description':'','status':'observed','nameStatus':'inferred','evidenceIds':[],
+                    'styles':s,'text':el.get('text') or kind,'state':row['state'],'viewport':row['viewport'],'contexts':[]})
+                context={'snapshotId':row['id'],'selector':el['selector'],'viewport':row['viewport'],'state':row['state'],'url':row['requestedUrl']}
+                if not any(c['snapshotId']==row['id'] for c in component['contexts']):
+                    component['contexts'].append(context);component['evidenceIds'].append(evid)
+    # Round-robin context buckets prevent early desktop/scroll samples from consuming the budget.
+    buckets=defaultdict(list)
+    for key,component in component_groups.items():
+        for context in component['contexts']:
+            bucket=(context['url'],context['viewport'],context['state'].split('-')[0],component['kind'])
+            if key not in buckets[bucket]:buckets[bucket].append(key)
+    selected=[]
+    while any(buckets.values()) and len(selected)<64:
+        for bucket in sorted(buckets):
+            if not buckets[bucket]:continue
+            key=buckets[bucket].pop(0)
+            if key not in selected:selected.append(key)
+            if len(selected)>=64:break
+    components=[component_groups[key] for key in selected]
+    omitted_components=len(component_groups)-len(components)
+    cov['omittedComponentCandidates']=omitted_components
+    if omitted_components:cov['gaps'].append('Component candidate limit reached: '+str(omitted_components)+' omitted')
     tokens, omitted = [], {}
     for category, items in groups.items():
         values = sorted(items.values(), key=lambda x:(-x['count'],x['id']))
@@ -150,17 +168,22 @@ def validate_model(model, run):
     cov = coverage(run)
     actual = {s['id']:s for s in cov['snapshots']}
     stored = {s['id']:s for s in model['coverage']['snapshots']}
-    if actual != stored:
+    semantic=lambda rows:{k:{p:v for p,v in row.items() if p!='file'} for k,row in rows.items()}
+    if semantic(actual) != semantic(stored):
         raise ValueError('模型证据快照过期；重新 build 并合并解释')
     if model['coverage'].get('planSha256') not in {None,cov['planSha256']} or any(
         model['coverage'].get(key)!=cov.get(key) for key in ('plannedPages','missing','selectionNotes','failures')):
         raise ValueError('模型采集计划或覆盖信息过期；重新 build 并合并解释')
     refs = {}
+    observations = {}
     for e in model.get('evidence', []):
         if e['id'] in refs or e['snapshotId'] not in actual:
             raise ValueError('证据重复或指向不存在的快照')
         refs[e['id']] = e
-        obs = read_json(local_file(run, actual[e['snapshotId']]['file']))
+        snapshot_id = e['snapshotId']
+        if snapshot_id not in observations:
+            observations[snapshot_id] = read_json(local_file(run, actual[snapshot_id]['file']))
+        obs = observations[snapshot_id]
         if e.get('method')=='css-declaration':
             rule_index=e.get('sourceRuleIndex')
             if not isinstance(rule_index,int) or not 0<=rule_index<len(obs.get('sourceRules',[])):
@@ -227,7 +250,10 @@ def validate_model(model, run):
                 raise ValueError('未知组件类型')
             if item['status'] == 'observed':
                 ref = refs[cited[0]]
-                obs = read_json(local_file(run,actual[ref['snapshotId']]['file']))
+                snapshot_id = ref['snapshotId']
+                if snapshot_id not in observations:
+                    observations[snapshot_id] = read_json(local_file(run,actual[snapshot_id]['file']))
+                obs = observations[snapshot_id]
                 el = next(x for x in obs['elements'] if x['selector']==ref['selector'])
                 if item['styles'] != el['styles']: raise ValueError('实测组件与原始样式不一致')
     if not model.get('tokens'): raise ValueError('没有可导出的 Token')

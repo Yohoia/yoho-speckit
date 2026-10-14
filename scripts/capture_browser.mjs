@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { launch, chromePath, sleep } from './cdp.mjs';
 
 if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Node.js 22+ required');
@@ -42,13 +43,14 @@ async function main() {
   const shutdown=async()=>{cdp.close();await browser.stop();};
   const interrupt=()=>{shutdown().finally(()=>process.exit(130));};
   process.once('SIGINT',interrupt);process.once('SIGTERM',interrupt);
-  let health={errors:[],failures:[]}, sheets=new Map(), navigations=0;
+  let health={errors:[],failures:[]}, sheets=new Map(), navigations=0, documents=[];
   const unsubscribe=cdp.on(message=>{
     const p=message.params||{};
     if(message.method==='CSS.styleSheetAdded') sheets.set(p.header.styleSheetId,p.header);
     if(message.method==='Runtime.exceptionThrown') health.errors.push('page exception: '+(p.exceptionDetails?.text||'unknown'));
     if(message.method==='Log.entryAdded' && p.entry.level==='error') health.errors.push('browser log error: '+p.entry.source);
     if(message.method==='Network.responseReceived' && p.response.status>=400) health.failures.push({url:publicUrl(p.response.url),status:p.response.status});
+    if(message.method==='Network.responseReceived' && p.type==='Document')documents.push({frameId:p.frameId,loaderId:p.loaderId,url:publicUrl(p.response.url),status:p.response.status});
     if(message.method==='Network.loadingFailed' && !p.canceled) health.failures.push({error:p.errorText});
     if(message.method==='Inspector.targetCrashed') health.errors.push('renderer crashed');
     if(message.method==='Page.frameNavigated' && !p.frame.parentId) navigations++;
@@ -57,7 +59,8 @@ async function main() {
     for(const method of ['Page.enable','Runtime.enable','Network.enable','DOM.enable','CSS.enable','Log.enable','Inspector.enable']) await cdp.send(method);
     const version=await cdp.send('Browser.getVersion');
     for(const job of request.jobs) {
-      health={errors:[],failures:[]};sheets=new Map();navigations=0;
+      health={errors:[],failures:[]};sheets=new Map();navigations=0;documents=[];
+      let failedState=job.snapshotState||job.state;
       try {
         if (!publicUrl(job.url) || !request.allowedOrigins.includes(new URL(job.url).origin)) throw new Error('URL outside authorized scope');
         await cdp.send('Emulation.setDeviceMetricsOverride',{width:job.width,height:job.height,deviceScaleFactor:1,mobile:false});
@@ -79,11 +82,15 @@ async function main() {
           await sleep(200);
         }
         if(!ready || !request.allowedOrigins.includes(new URL(ready.url).origin)) throw new Error('Final URL outside authorized scope');
+        const mainDocument=documents.findLast(d=>d.frameId===navigation.frameId && d.loaderId===navigation.loaderId);
+        if(!mainDocument)throw new Error('Main document HTTP status unavailable');
+        if(mainDocument.status>=400)throw new Error('Main document HTTP '+mainDocument.status+': '+mainDocument.url);
         await sleep(request.settleMs);
         if (/just a moment|access denied|verify you are human/i.test(await cdp.evaluate('document.title'))) throw new Error('Challenge page; target not observed');
         const positions=job.state==='default' && request.checkpoints>1 ? Array.from({length:request.checkpoints},(_,i)=>i/(request.checkpoints-1)) : [0];
         let walkComplete=false, steps=0;
         for(let point=0;point<positions.length;point++) {
+          failedState=point===0?(job.snapshotState||job.state):'scroll-'+String(point).padStart(2,'0');
           if(point>0) {
             while(steps<request.maxSteps) {
               const g=await cdp.evaluate('({y:scrollY,h:innerHeight,total:document.documentElement.scrollHeight})');
@@ -105,6 +112,7 @@ async function main() {
             await sleep(request.settleMs);
           }
           const observation=await cdp.evaluate('('+probe+')('+JSON.stringify({maxElements:request.maxElements})+')');
+          observation.capturedAt=new Date().toISOString();
           const state=point===0?(job.snapshotState||job.state):'scroll-'+String(point).padStart(2,'0');
           if(job.state!=='default') {
             const applied=await cdp.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(job.selector)});return !!el&&${job.state==='hover'?"el.matches(':hover')":"document.activeElement===el"};})()`);
@@ -119,18 +127,21 @@ async function main() {
           observation.walkComplete=positions.length===1 ? geometry.total<=geometry.h : point===positions.length-1 ? walkComplete : undefined;
           observation.health={errors:health.errors.slice(0,100),failures:health.failures.slice(0,100),navigations};
           observation.browser={product:version.product,protocolVersion:version.protocolVersion,metricsMode:'css-viewport'};
+          observation.mainDocument=mainDocument;
+          observation.captureConfig=job.captureConfig;observation.captureAttempt=job.attemptId;
+          observation.checkpoint={index:point,fraction:positions[point]};
           observation.capabilities={backend:'local-cdp',matchedStyles:true,renderedFonts:true};
           await sourceEvidence(cdp,observation,sheets,out,request.maxMatched);
           const id=hash(job.url+'|'+job.viewport+'|'+state).slice(0,16);
-          const file=id+'.json', screenshot=id+'.jpg';
+          const file=id+'.json.gz', screenshot=id+'.jpg';
           const image=await cdp.send('Page.captureScreenshot',{format:'jpeg',quality:92},30000);
           await writeFile(path.join(out,screenshot),Buffer.from(image.data,'base64'));
-          await writeFile(path.join(out,file),JSON.stringify(observation));
+          await writeFile(path.join(out,file),gzipSync(JSON.stringify(observation)));
           result.snapshots.push({file,screenshot,url:job.url,viewport:job.viewport,state});await saveResult();
           console.log(JSON.stringify({status:'staged',url:job.url,viewport:job.viewport,state,elements:observation.elements.length}));
         }
       } catch(error) {
-        result.failures.push({url:job.url,viewport:job.viewport,state:job.snapshotState||job.state,stage:'capture',message:error.message});
+        result.failures.push({url:job.url,viewport:job.viewport,state:failedState,stage:'capture',message:error.message});
         await saveResult();
       }
     }
@@ -151,14 +162,15 @@ async function sourceEvidence(cdp,obs,sheets,out,limit) {
   const root=await cdp.send('DOM.getDocument',{depth:0});
   const chosen=obs.elements.filter(el=>el.hasText||['button','nav','input','svg'].includes(el.tag)||Object.keys(el.pseudos).length).slice(0,limit);
   if(chosen.length<obs.elements.length)obs.gaps.push('matched-style/font sampling limited to '+chosen.length+' representative elements');
-  const readRule=(entry,pseudo=null,inherited=false)=>{
+  const readRule=(entry,pseudo=null,inherited=false,ancestorSelector=null,ancestorDepth=null)=>{
     const rule=entry.rule, header=sheets.get(rule.style.styleSheetId);
     // Comma-separated media queries are alternatives; nested media blocks are cumulative.
     const mediaActive=(rule.media||[]).every(m=>!m.mediaList?.length || m.mediaList.some(v=>v.active!==false));
     return {selector:rule.selectorList.text,matchingSelectors:entry.matchingSelectors,active:mediaActive,
       href:publicUrl(header?.sourceURL)||'inline',styleSheetId:rule.style.styleSheetId,range:rule.style.range,
       values:Object.fromEntries(rule.style.cssProperties.filter(p=>!p.disabled && p.parsedOk!==false).map(p=>[p.name,p.value])),
-      context:(rule.media||[]).map(m=>m.text).join(' / '),pseudo,inherited,provenance:'matched-candidate'};
+      context:(rule.media||[]).map(m=>m.text).join(' / '),pseudo,inherited,ancestorSelector,ancestorDepth,
+      origin:rule.origin,provenance:'matched-candidate'};
   };
   for(const el of chosen) {
     try {
@@ -166,10 +178,23 @@ async function sourceEvidence(cdp,obs,sheets,out,limit) {
       if(!nodeId)continue;
       const match=await cdp.send('CSS.getMatchedStylesForNode',{nodeId});
       el.matchedRules=(match.matchedCSSRules||[]).map(r=>readRule(r));
-      for(const inherited of match.inherited||[])el.matchedRules.push(...(inherited.matchedCSSRules||[]).map(r=>readRule(r,null,true)));
+      for(const [depth,inherited] of (match.inherited||[]).entries()) {
+        const ancestorSelector=el.ancestorSelectors?.[depth]||null;
+        el.matchedRules.push(...(inherited.matchedCSSRules||[]).map(r=>readRule(r,null,true,ancestorSelector,depth+1)));
+        if(inherited.inlineStyle?.cssProperties?.length)el.matchedRules.push({selector:ancestorSelector||'unknown',
+          values:Object.fromEntries(inherited.inlineStyle.cssProperties.filter(p=>!p.disabled&&p.parsedOk!==false).map(p=>[p.name,p.value])),
+          active:true,origin:'inline',inherited:true,ancestorSelector,ancestorDepth:depth+1,pseudo:null,provenance:'matched-candidate'});
+      }
       for(const pseudo of match.pseudoElements||[])el.matchedRules.push(...(pseudo.matches||[]).map(r=>readRule(r,'::'+pseudo.pseudoType)));
       if(el.hasText)el.renderedFonts=(await cdp.send('CSS.getPlatformFontsForNode',{nodeId})).fonts;
     } catch { obs.gaps.push('matched-style/font unavailable for '+el.selector); }
   }
+  const table=[],positions=new Map();
+  for(const el of obs.elements) {
+    if(!el.matchedRules)continue;
+    el.matchedRuleRefs=el.matchedRules.map(rule=>{const key=JSON.stringify(rule);if(!positions.has(key)){positions.set(key,table.length);table.push(rule)}return positions.get(key)});
+    delete el.matchedRules;
+  }
+  obs.matchedRuleTable=table;
   obs.gaps=[...new Set(obs.gaps)];
 }

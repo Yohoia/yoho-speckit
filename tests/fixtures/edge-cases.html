@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>SpecKit collection edge cases</title>
+<style>
+:root{--brand:#00ff00}body{margin:20px;color:#171717;background:#fff;font:16px/24px Arial}
+button,.btn{border:1px solid #999;border-radius:6px;font:16px/24px Arial;padding:8px 16px;background:var(--brand);color:#171717}
+#second{color:white;font-weight:700;padding:16px 32px}.parent{background:red;padding:24px;color:#5b21b6;font-family:Arial}
+#child{background:var(--brand);padding:8px}#explicit{background:inherit}
+.spacer{height:3000px}p{margin:0}
+</style>
+<button id="first">Normal</button><button id="second">Distinct appearance</button><a class="btn" href="/">Anchor action</a>
+<div class="parent" id="parent"><div id="child">Variable and inherited text</div><div id="explicit">Explicit inherited background</div></div>
+<div id="variants"></div><div class="spacer"></div><p>Bottom</p>
+<script>for(let i=0;i<20;i++){const b=document.createElement('button');b.id='variant'+i;b.textContent='Variant '+i;b.style.background='rgb('+(20+i*8)+',80,120)';document.querySelector('#variants').append(b)}</script>
