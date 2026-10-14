@@ -119,6 +119,8 @@ def plan_for(run):
             raise ValueError("视口名称无效")
         if any(not isinstance(view.get(k), int) or view[k] < 1 for k in ("width", "height")):
             raise ValueError("视口尺寸必须为正整数")
+    if not plan.get('viewports') or len({v['name'] for v in plan['viewports']})!=len(plan['viewports']):
+        raise ValueError('视口必须非空且名称唯一')
     plan["pages"] = pages
     return plan
 
@@ -134,7 +136,7 @@ def snapshot_key(requested, viewport_name, state):
 
 def validate_observation(obs):
     if obs.get("method") != "dom-computed-style" or obs.get("schemaVersion") != 1:
-        raise ValueError("需要共用探针的 DOM 实测结果，branding/Markdown 不能代替")
+        raise ValueError("需要采集器的 DOM 实测结果，文字摘要不能代替")
     url(obs["url"])
     if not obs.get("capturedAt") or not obs.get("elements"):
         raise ValueError("观察时间或元素缺失，可能未加载目标页面")
@@ -184,15 +186,18 @@ def _ingest(run, obs, backend, viewport_name, state="default", requested_url=Non
         path = local_file(run, screenshot)
         if not path.is_file():
             raise ValueError("截图文件不存在")
-        shot = path.relative_to(run).as_posix()
-    path = run / "evidence" / "observations" / (key + ".json")
+        data=path.read_bytes();image_hash=hashlib.sha256(data).hexdigest()
+        shot='evidence/screenshots/'+key+'-'+image_hash[:16]+path.suffix
+        target=local_file(run,shot);target.parent.mkdir(parents=True,exist_ok=True)
+        if not target.exists():target.write_bytes(data)
+    path = run / "evidence" / "observations" / (key + '-' + digest(obs)[:16] + ".json")
     write_json(path, obs)
     row = {"id": key, "requestedUrl": requested, "url": url(obs["url"]), "viewport": viewport_name,
            "state": state, "backend": backend, "capturedAt": obs["capturedAt"],
            "file": path.relative_to(run).as_posix(), "sha256": digest(obs), "screenshot": shot,
            "screenshotSha256": hashlib.sha256(local_file(run,shot).read_bytes()).hexdigest() if shot else None}
     for old in index["failures"]:
-        if old.get("url") == requested and old.get("viewport") == viewport_name and old.get("stage") != "cleanup":
+        if old.get("url") == requested and old.get("viewport") == viewport_name and old.get('state')==state and old.get("stage") != "cleanup":
             old["resolvedAt"] = now()
     index["snapshots"] = [x for x in index["snapshots"] if x["id"] != key] + [row]
     write_json(run / "evidence" / "index.json", index)
@@ -206,12 +211,22 @@ def coverage(run):
     missing = [{"url": p, "viewport": v["name"], "state": "default"}
                for p in plan["pages"] for v in plan["viewports"] if (p, v["name"], "default") not in successful]
     candidates = {}
+    stale=[]
     for row in index["snapshots"]:
         obs = read_json(local_file(run, row["file"]))
         if digest(obs) != row["sha256"]:
             raise ValueError("证据摘要不一致：" + row["id"])
         if row.get("screenshot") and hashlib.sha256(local_file(run,row["screenshot"]).read_bytes()).hexdigest() != row.get("screenshotSha256"):
             raise ValueError("截图摘要不一致：" + row["id"])
+        for sheet in obs.get('stylesheets',[]):
+            if hashlib.sha256(local_file(run,sheet['file']).read_bytes()).hexdigest()!=sheet['sha256']:
+                raise ValueError('原始样式表摘要不一致：'+row['id'])
+        view=next((v for v in plan['viewports'] if v['name']==row['viewport']),None)
+        if not view or any(abs(obs['viewport'][k]-view[k])>1 for k in ('width','height')):
+            stale.append(row['id']);gaps.append(row['id']+': snapshot viewport differs from current plan')
+            if row['state']=='default' and view:
+                item={'url':row['requestedUrl'],'viewport':row['viewport'],'state':'default'}
+                if item not in missing:missing.append(item)
         for link in obs.get("links", []):
             try:
                 target = url(link["url"])
@@ -226,11 +241,19 @@ def coverage(run):
         if obs.get("inaccessibleStylesheets"): gaps.append(row["id"] + ": some stylesheet declarations unreadable")
         if not row.get("screenshot"): gaps.append(row["id"] + ": screenshot missing")
         if obs.get("canvasCount"): gaps.append(row["id"] + ": canvas graphics not measured as DOM styles")
-    if not any(x["state"] != "default" for x in index["snapshots"]):
+        for gap in obs.get('gaps',[]):gaps.append(row['id']+': '+gap)
+        if obs.get('health',{}).get('failures'):gaps.append(row['id']+': resource failures observed')
+        if obs.get('health',{}).get('errors'):gaps.append(row['id']+': browser errors observed')
+        if obs.get('readiness',{}).get('unloadedImages'):gaps.append(row['id']+': images not ready')
+    kinds={x['state'].split('-')[0] for x in index['snapshots'] if x['id'] not in stale}
+    if not kinds & {'hover','focus','nav'}:
         gaps.append("Only default states captured; hover/focus/expanded states remain unverified")
-    return {"plannedPages": plan["pages"], "pageCount": len({x["requestedUrl"] for x in index["snapshots"]}),
+    else:
+        unverified={'hover','focus','expanded'}-kinds
+        if unverified:gaps.append('Unverified interaction kinds: '+', '.join(sorted(unverified)))
+    return {"planSha256":digest(plan),"plannedPages": plan["pages"], "pageCount": len({x["requestedUrl"] for x in index["snapshots"]}),
             "snapshotCount": len(index["snapshots"]), "snapshots": index["snapshots"],
-            "missing": missing, "failures": [x for x in index["failures"] if not x.get("resolvedAt")],
+            "missing": missing,"staleSnapshots":stale, "failures": [x for x in index["failures"] if not x.get("resolvedAt")],
             "failureHistory":index["failures"], "gaps": sorted(set(gaps)),
             "unvisitedCandidates": sorted(candidates.values(), key=lambda x: (not x.get("inNavigation"), x["url"])),
             "selectionNotes": plan.get("selectionNotes", [])}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>SpecKit extraction fixture</title>
+<style>
+:root{--brand:#297a3a;--ink:#171717}
+body{margin:0;padding:24px;color:var(--ink);background:#fff;font:16px/24px "Missing Fixture Font",Arial,sans-serif}
+h1{font-size:40px;line-height:48px;color:var(--brand)}
+nav{display:flex;gap:16px;margin-bottom:24px}
+.card{padding:16px;border:1px solid #ddd;border-radius:6px;background:#fff;max-width:640px}
+.decor{position:relative;width:160px;height:80px;margin:24px 0}
+.decor::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,#f00,#00f);box-shadow:0 2px 4px #0002}
+#pill{border-radius:3.35544e+07px;padding:8px 16px;color:#fff;background:var(--brand);border:0;font:inherit}
+#pill:hover{background:#0070f3}
+#pill:focus{outline:2px solid #f00;outline-offset:4px}
+.never-matches{background:#fff}
+@media(max-width:1px){.card{color:#f00;background:#fff}}
+@media(max-width:1px), (min-width:100px){#body-text{letter-spacing:.5px}}
+@media(max-width:500px){h1{font-size:28px;line-height:36px}.card{padding:12px}}
+.spacer{height:1800px;background:#fafafa}
+#lazy{color:#800080;font-size:22px}
+</style><body>
+<nav><a href="/">Home</a><a href="/pricing">Pricing</a></nav>
+<h1>Design reference</h1>
+<div class="card"><p id="body-text">Source-backed typography</p><button id="pill">Continue</button></div>
+<div class="decor" id="decor"></div>
+<svg width="40" height="40" aria-label="vector mark"><circle cx="20" cy="20" r="18" fill="#ff8800"/></svg>
+<div class="spacer"></div><p id="lazy">Lazy section</p>
+<script>const lazy=document.querySelector('#lazy');lazy.style.visibility='hidden';new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting)){lazy.style.visibility='visible';lazy.dataset.loaded='true'}}).observe(lazy);</script>
+</body></html>

@@ -1,12 +1,8 @@
 import copy
-import io
 import json
-import os
 import sys
 import tempfile
-import gzip
 import base64
-import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
 import unittest
@@ -20,7 +16,7 @@ from model import build, validate_model, validate_value, NARRATIVE_SECTIONS
 from exporter import export, verify, css_values, tokens_json, color_display
 from exporter import display_value
 from colors import to_hex, normalize_css, conversion_info
-from capture_firecrawl import capture, ApiClient, ProviderError, interact_result, download_capture
+from capture import commit_snapshot, capture, doctor as browser_doctor, record_failure
 
 
 def observation(width=1440,height=1000):
@@ -302,46 +298,6 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(ValueError):init_run('https://fixture.test/?token=private',Path(self.temp.name)/'bad','single',None)
         with self.assertRaises(ValueError):local_file(self.run,'../outside.json')
 
-    def test_api_consumes_runtime_key_without_echo(self):
-        with patch.dict(os.environ,{'FIRECRAWL_API_KEY':'unit-test-secret-do-not-use'}):
-            client=ApiClient()
-        class Response(io.BytesIO):
-            def __enter__(self):return self
-            def __exit__(self,*args):self.close()
-        requests=[]
-        def open_request(request,timeout):
-            requests.append(request)
-            return Response(json.dumps({'success':True,'data':{'ok':True}}).encode())
-        client.opener.open=open_request
-        result=client.request('POST','/scrape',{'url':'https://fixture.test/'})
-        self.assertEqual(requests[0].get_header('Authorization'),'Bearer unit-test-secret-do-not-use')
-        self.assertNotIn('unit-test-secret',json.dumps(result))
-
-    def test_cloud_failure_stops_once_and_cleans_session(self):
-        class Failing:
-            calls=0;stops=0
-            def scrape(self,*args):return {'metadata':{'statusCode':200,'scrapeId':'00000000-0000-0000-0000-000000000000'}}
-            def interact(self,*args):self.calls+=1;raise ProviderError('http_401')
-            def stop(self,*args):self.stops+=1
-        client=Failing()
-        with self.assertRaises(ProviderError):capture(client,self.run,'https://fixture.test/',plan_for(self.run)['viewports'][0])
-        self.assertEqual((client.calls,client.stops),(1,1))
-        self.assertEqual(index_for(self.run)['failures'][0]['stage'],'interact')
-
-    def test_provider_stdout_contract(self):
-        result={'observation':observation(),'screenshot':None}
-        self.assertEqual(interact_result({'stdout':'log\n'+json.dumps(result),'exitCode':0}),result)
-        with self.assertRaises(ProviderError):interact_result({'exitCode':1,'stdout':'anything'})
-        self.assertEqual(interact_result({'chunk':'example'}),{'chunk':'example'})
-        with self.assertRaises(ProviderError):interact_result({'stdout':'partial','truncated':True})
-
-    def test_local_doctor_never_queries_cloud(self):
-        class Result:stdout='v24.21.0';returncode=0
-        with patch('design.shutil.which',side_effect=lambda name:'/fake/'+name), patch('design.subprocess.run',return_value=Result()) as invoked:
-            result=doctor()
-        self.assertIsNone(result['firecrawlCli']['authenticated'])
-        self.assertTrue(all('--status' not in call.args[0] for call in invoked.call_args_list))
-
     def test_concurrent_snapshots_preserve_both_rows(self):
         with ThreadPoolExecutor(max_workers=2) as pool:
             one=pool.submit(ingest,self.run,observation(),'browser','desktop')
@@ -349,22 +305,6 @@ class PipelineTests(unittest.TestCase):
             one.result();two.result()
         self.assertEqual(len(index_for(self.run)['snapshots']),2)
         self.assertFalse(coverage(self.run)['missing'])
-
-    def test_large_capture_chunk_integrity(self):
-        raw=json.dumps(observation()).encode();compressed=gzip.compress(raw)
-        files={'observation':compressed,'screenshot':b'\x89PNG\r\n\x1a\n'+b'x'*600000}
-        manifest={k:{'bytes':len(v),'sha256':hashlib.sha256(v).hexdigest()} for k,v in files.items()}
-        manifest['observation'].update(compression='gzip',rawBytes=len(raw))
-        class Chunks:
-            def interact(self,id,code):
-                start,end=map(int,re.search(r'subarray\((\d+),(\d+)\)',code).groups())
-                kind='observation' if '-observation.' in code else 'screenshot'
-                return {'chunk':base64.b64encode(files[kind][start:end]).decode()}
-        result=download_capture(Chunks(),'session','key',manifest)
-        self.assertEqual(result['observation'],observation())
-        self.assertEqual(base64.b64decode(result['screenshot']),files['screenshot'])
-        manifest['screenshot']['sha256']='wrong'
-        with self.assertRaises(ProviderError):download_capture(Chunks(),'session','key',manifest)
 
     def test_original_css_declarations_and_pseudos_are_traceable(self):
         obs=observation()
@@ -378,8 +318,98 @@ class PipelineTests(unittest.TestCase):
         model['tokens'].append({'id':ref,'name':'paper','label':'Paper','category':'color','type':'color',
             'value':'#faf9f6','status':'observed','evidenceIds':[ref],'role':''})
         validate_model(model,self.run)
+        review(model);write_json(self.run/'design.json',model)
+        export(self.run)
+        self.assertEqual(verify(self.run)['status'],'passed')
         model['evidence'][-1]['value']='#fff'
         with self.assertRaises(ValueError):validate_model(model,self.run)
+
+    def test_inactive_or_unmatched_equal_rule_is_not_a_source(self):
+        obs=observation();obs['sourceRules']=[{'selector':'.never-matches','context':'(max-width: 1px)',
+            'values':{'background':'#ffffff'}}]
+        ingest(self.run,obs,'local-cdp','desktop');_,model=build(self.run);review(model)
+        write_json(self.run/'design.json',model);export(self.run)
+        data=read_json(self.run/'design-tokens.json')
+        self.assertTrue(all(not t['$extensions']['org.yoho-design-extractor']['sourceDeclarations'] for t in data['color'].values()))
+
+    def test_cdp_matched_variable_retains_candidate_provenance(self):
+        obs=observation();obs['elements'][0]['matchedRules']=[{'selector':'button','active':True,
+            'values':{'color':'var(--ink)'},'href':'https://fixture.test/style.css'}]
+        ingest(self.run,obs,'local-cdp','desktop');_,model=build(self.run);review(model)
+        write_json(self.run/'design.json',model);export(self.run)
+        data=read_json(self.run/'design-tokens.json')
+        token=next(t for t in data['color'].values() if t['$value']=='#171717')
+        source=token['$extensions']['org.yoho-design-extractor']['sourceDeclarations'][0]
+        self.assertEqual(source['value'],'var(--ink)')
+        self.assertEqual(source['matchStatus'],'matched-candidate')
+
+    def test_exponent_radius_is_preserved(self):
+        obs=observation();obs['elements'][0]['styles']['borderTopLeftRadius']='1.67772e+07px'
+        ingest(self.run,obs,'local-cdp','desktop');_,model=build(self.run)
+        self.assertIn('1.67772e+07px',[t['value'] for t in model['tokens'] if t['category']=='radius'])
+
+    def test_plan_change_invalidates_exported_coverage(self):
+        self.model();export(self.run)
+        plan=plan_for(self.run);plan['pages'].append('https://fixture.test/pricing');write_json(self.run/'plan.json',plan)
+        with self.assertRaisesRegex(ValueError,'覆盖信息过期'):verify(self.run)
+
+    def test_unsupported_color_is_not_marked_hex(self):
+        obs=observation()
+        for el in obs['elements']:el['styles']['color']='color(rec2020 0.2 0.3 0.4)'
+        ingest(self.run,obs,'local-cdp','desktop');_,model=build(self.run);review(model)
+        write_json(self.run/'design.json',model);export(self.run)
+        entry=next(t for t in read_json(self.run/'design-tokens.json')['color'].values() if t['$value'].startswith('color('))
+        info=entry['$extensions']['org.yoho-design-extractor']['normalization']
+        self.assertEqual(info['status'],'unsupported');self.assertIsNone(info['encoding'])
+        self.assertTrue(any('unsupported' in gap for gap in read_json(self.run/'evidence'/'coverage.json')['gaps']))
+
+    def test_snapshot_commit_failure_preserves_old_evidence(self):
+        self.model();old=index_for(self.run)
+        stage=Path(self.temp.name)/'stage';stage.mkdir()
+        obs=observation(390,844);write_json(stage/'new.json',obs)
+        (stage/'new.jpg').write_bytes(b'\xff\xd8sample')
+        with self.assertRaises(ValueError):commit_snapshot(self.run,stage,
+            {'file':'new.json','screenshot':'new.jpg','url':'https://fixture.test/','viewport':'desktop','state':'default'},True)
+        self.assertEqual(old,index_for(self.run));self.assertEqual(len(coverage(self.run)['snapshots']),2)
+
+    def test_observations_and_images_are_immutable_on_refresh(self):
+        incoming=self.run/'incoming';incoming.mkdir();shot=incoming/'capture.jpg';shot.write_bytes(b'\xff\xd8old')
+        ingest(self.run,observation(),'local-cdp','desktop',screenshot='incoming/capture.jpg')
+        old=copy.deepcopy(index_for(self.run)['snapshots'][0]);old_image=local_file(self.run,old['screenshot']).read_bytes()
+        obs=observation();obs['capturedAt']='2026-10-14T00:00:00Z';shot.write_bytes(b'\xff\xd8new')
+        ingest(self.run,obs,'local-cdp','desktop',screenshot='incoming/capture.jpg',replace=True)
+        new=index_for(self.run)['snapshots'][0]
+        self.assertNotEqual(old['file'],new['file']);self.assertNotEqual(old['screenshot'],new['screenshot'])
+        self.assertEqual(local_file(self.run,old['screenshot']).read_bytes(),old_image)
+
+    def test_missing_dependency_and_completed_resume(self):
+        with patch('capture.shutil.which',return_value=None):self.assertFalse(browser_doctor()['ready'])
+        with patch('capture.doctor',return_value={'ready':False}):
+            with self.assertRaisesRegex(ValueError,'Node.js'):capture(self.run)
+        self.model()
+        with patch('capture.doctor',side_effect=AssertionError('must not start browser')):
+            self.assertEqual(capture(self.run,checkpoints=1)['status'],'unchanged')
+
+    def test_changed_viewport_is_not_reused_as_completed(self):
+        self.model();plan=plan_for(self.run);plan['viewports'][1]['width']=400;write_json(self.run/'plan.json',plan)
+        self.assertIn('mobile',[item['viewport'] for item in coverage(self.run)['missing']])
+        with patch('capture.doctor',return_value={'ready':False}):
+            with self.assertRaisesRegex(ValueError,'Node.js'):capture(self.run,checkpoints=1)
+
+    def test_success_only_resolves_the_same_failed_state(self):
+        for state in ['hover-target','focus-target']:
+            record_failure(self.run,{'url':'https://fixture.test/','viewport':'desktop','state':state,'stage':'capture','message':'failed'})
+        ingest(self.run,observation(),'local-cdp','desktop','hover-target')
+        unresolved=coverage(self.run)['failures']
+        self.assertEqual([item['state'] for item in unresolved],['focus-target'])
+
+    def test_raw_css_tampering_is_detected_before_reuse(self):
+        import hashlib
+        obs=observation();path=self.run/'evidence'/'stylesheets'/'raw.css';path.parent.mkdir();path.write_text('body { color: #171717 }')
+        obs['stylesheets']=[{'file':'evidence/stylesheets/raw.css','sha256':hashlib.sha256(path.read_bytes()).hexdigest()}]
+        ingest(self.run,obs,'local-cdp','desktop');ingest(self.run,observation(390,844),'local-cdp','mobile')
+        path.write_text('body { color: red }')
+        with self.assertRaisesRegex(ValueError,'样式表摘要'):capture(self.run,checkpoints=1)
 
 
 if __name__=='__main__':unittest.main()

@@ -66,18 +66,36 @@ def _source_candidates(evidence, element, token, observation):
     matches = []
     if element and element.get('styleDeclarations'):
         for source_property, declared in element['styleDeclarations'].items():
-            if source_property in properties and css_values_equal(expected, declared, token.get('category')):
+            if source_property in properties:
                 matches.append({'method':'inline-style','selector':evidence['selector'],'property':source_property,
-                    'value':declared,'computedValue':expected})
-    for index, rule in enumerate(observation.get('sourceRules', [])):
+                    'value':declared,'computedValue':expected,'matchStatus':'inline-candidate'})
+    if evidence.get('method')=='css-declaration':
+        rule=observation['sourceRules'][evidence['sourceRuleIndex']]
+        return [{'method':'css-declaration','sourceRuleIndex':evidence['sourceRuleIndex'],
+            'selector':rule.get('selector',''),'property':evidence['property'],'value':evidence['value'],
+            'computedValue':expected,'href':rule.get('href',''),'context':rule.get('context',''),
+            'matchStatus':'explicit-declaration-evidence'}]
+    rules=element.get('matchedRules',[]) if element else []
+    if evidence.get('property','').startswith('::'):
+        pseudo,prop=evidence['property'].split('.',1)
+        properties=PROPERTY_ALIASES.get(prop,(prop,))
+        rules=[rule for rule in rules if rule.get('pseudo')==pseudo]
+    else:rules=[rule for rule in rules if not rule.get('pseudo')]
+    if not rules:
+        rules=[dict(rule,sourceRuleIndex=index) for index,rule in enumerate(observation.get('sourceRules',[]))
+            if not rule.get('context') and evidence['selector'] in [x.strip() for x in rule.get('selector','').split(',')]]
+    for rule in rules:
+        if rule.get('active') is False:continue
         values = rule.get('values', {})
         for source_property, declared in values.items():
-            if source_property not in properties or not css_values_equal(expected, declared, token.get('category')):
+            if source_property not in properties or ('active' not in rule and not css_values_equal(expected, declared, token.get('category'))):
                 continue
             exact_selector = any(part.strip() == evidence.get('selector') for part in rule.get('selector', '').split(','))
-            matches.append({'method':'css-declaration','sourceRuleIndex':index,'selector':rule.get('selector',''),
+            matches.append({'method':'css-declaration','sourceRuleIndex':rule.get('sourceRuleIndex'),'selector':rule.get('selector',''),
                 'property':source_property,'value':declared,'computedValue':expected,'href':rule.get('href',''),
-                'context':rule.get('context',''), '_exact_selector': exact_selector})
+                'context':rule.get('context',''),'range':rule.get('range'),
+                'matchStatus':'matched-candidate' if 'active' in rule else 'selector-exact-candidate',
+                '_exact_selector': exact_selector})
     matches.sort(key=lambda item: not item.get('_exact_selector', False))
     for item in matches: item.pop('_exact_selector', None)
     unique, seen = [], set()
@@ -98,12 +116,18 @@ def attach_source_declarations(model, run):
     evidence_by_id = {item.get('id'): item for item in model.get('evidence', [])}
     for token in model.get('tokens', []):
         candidates = []
+        rendered=[]
         for evidence_id in token.get('evidenceIds', []):
             evidence = evidence_by_id.get(evidence_id)
             if not evidence: continue
             observation = observations.get(evidence.get('snapshotId'))
             if not observation: continue
-            element = next((el for el in observation.get('elements', []) if el.get('id') == evidence_id.split(':')[1]), None)
+            parts=evidence_id.split(':')
+            element = next((el for el in observation.get('elements', []) if len(parts)>1 and el.get('id')==parts[1]), None)
+            if token['category']=='font' and element:
+                for font in element.get('renderedFonts',[]):
+                    item={**font,'snapshotId':evidence['snapshotId'],'selector':element['selector']}
+                    if item not in rendered:rendered.append(item)
             candidates.extend(_source_candidates(evidence, element, token, observation))
         unique, seen = [], set()
         for item in candidates:
@@ -112,6 +136,7 @@ def attach_source_declarations(model, run):
             seen.add(key); unique.append(item)
             if len(unique) >= 3: break
         if unique: token['sourceDeclarations'] = unique
+        if rendered:token['renderedFonts']=rendered
     return model
 
 def variable(token):
@@ -174,6 +199,7 @@ def tokens_json(model, compact=False):
                 'nameStatus':t.get('nameStatus','inferred'), 'evidenceIds':t['evidenceIds'], 'cssVariable':variable(t),
                 'sourceCategory':t['category'],
                 'computedValue':t['value'], 'displayValue':display_value(t),
+                'renderedFonts':t.get('renderedFonts',[]),
                 'normalization':conversion_info(t['value']) if t['category'] in {'color','surface','gradient','shadow'} else {},
                 'sourceDeclarations':t.get('sourceDeclarations', [])}}}
     result['$extensions'] = {'org.yoho-design-extractor': {
@@ -194,6 +220,9 @@ def generate(model, run):
         raise ValueError('先完成 Agent 解释，填写摘要并将 review.status 设为 reviewed')
     css_map = css_values(model)
     export_model = attach_source_declarations(json.loads(json.dumps(model)), run)
+    for t in export_model['tokens']:
+        if t['category'] in {'color','surface','gradient','shadow'} and conversion_info(t['value'])['status']=='unsupported':
+            export_model['coverage']['gaps'].append(t['id']+': color encoding unsupported; original retained')
     for t in export_model['tokens']:
         t['cssVariable'] = variable(t)
         t['displayValue'] = display_value(t)
@@ -224,7 +253,13 @@ def export(run):
     run = Path(run)
     model = read_json(run/'design.json')
     files = generate(model, run)
-    write_json(run/'evidence'/'coverage.json',model['coverage'])
+    from common import coverage
+    cov=coverage(run)
+    for key in ('omittedTokenCandidates','rejectedTokenCandidates'):cov[key]=model['coverage'].get(key,{})
+    for t in model['tokens']:
+        if t['category'] in {'color','surface','gradient','shadow'} and conversion_info(t['value'])['status']=='unsupported':
+            cov['gaps'].append(t['id']+': color encoding unsupported; original retained')
+    write_json(run/'evidence'/'coverage.json',cov)
     for name, content in files.items():
         target = run/name
         temporary = run/(name+'.tmp')

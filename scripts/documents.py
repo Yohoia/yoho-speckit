@@ -63,6 +63,7 @@ def document(model, compact, variable):
         title=s['name']+' — '+role(t)
         if not compact:title+=' · '+variable(t)
         lines+=['### '+title,'','- **Substitute:** '+s['fallback']]
+        if s['renderedFonts']:lines.append('- **Rendered fonts observed:** '+', '.join(s['renderedFonts']))
         for key,label in [('weights','Weights'),('sizes','Sizes'),('lineHeights','Line height'),('letterSpacings','Letter spacing')]:
             lines.append('- **'+label+':** '+(', '.join(s[key]) or '未确认'))
         if not compact and s['features']:lines.append('- **OpenType features:** '+', '.join(s['features']))

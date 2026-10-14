@@ -30,6 +30,7 @@ def font_summary(token, model):
         and t['value']['fontFamily']==token['value']]
     fallback = ', '.join(token['value'].split(',')[1:]).strip()
     return {'name':token['label'] if token['label']!=token['value'] else family_name(token['value']),
+        'renderedFonts':list(dict.fromkeys(f['familyName'] for f in token.get('renderedFonts',[]) if f.get('familyName'))),
         'fallback':fallback or '未确认',
         'weights':ordered([r['fontWeight'] for r in rows]),
         'sizes':ordered([r['fontSize'] for r in rows]),

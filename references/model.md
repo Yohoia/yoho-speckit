@@ -39,7 +39,9 @@ CSS 值为单个属性值，不能携带其他声明或外部资源地址。
 
 按 evidenceIds 找 evidence，再按 snapshotId 找 coverage.snapshots。
 快照 file 保存完整观察；selector/property 定位元素与原值。
-原始 CSS 声明保存在 sourceRules/sourceVariables；解析后的 px 不代表源单位。
+原始 CSS 声明保存在 sourceRules/sourceVariables，原始文本文件见 stylesheets 的本地路径。
+CDP的matchedRules带来源、范围、继承与伪元素上下文；matched-candidate不证明最终获胜声明。
+renderedFonts记录代表节点实际字体；fontFamily仍为声明栈。解析后的px不代表源单位。
 声明证据可使用 method=css-declaration、sourceRuleIndex、selector、property、value，
 指向原始 sourceRules 的对应值；不要将声明中未解析的变量当成可独立使用的值。
 伪元素证据的 property 使用 ::before.backgroundImage 等坐标。

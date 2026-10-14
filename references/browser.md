@@ -1,40 +1,58 @@
-# 宿主浏览器适配
+# 本地 Chrome/CDP 采集
 
-回到 [主流程](../SKILL.md)。宿主提供浏览器时读取。
+回到 [主流程](../SKILL.md)。环境检查、采集或恢复时读取。
 
-## 共用探针
+## 环境
 
-先阅读宿主浏览器文档，使用其支持的接口与权限。
-读取 assets/probe.js，把函数文本传入只读页面求值能力。
-文件是函数表达式，不需要在源站插入 script 标签或安装软件包。
-完整 Playwright 调用形式为：
+需要 Python 3.10+、Node.js 22+、本机 Chrome/Chromium。
+只有本地 CDP 这一条采集路线；没有 npm、SDK 或 API Key 配置。
+运行 doctor 检查版本与浏览器路径；检查不启动浏览器或访问网站。
+Chrome 非默认位置时设置 SPECKIT_CHROME_PATH 为可执行文件路径。
+安装依赖按用户授权和平台官方安装方式进行，不自动安装或降级后端。
 
-```javascript
-const observation = await page.evaluate(probeFunction, { maxElements: 600 });
-```
+采集器启动独立 headless 浏览器，用随机调试端口和临时用户配置。
+只连接自己启动的 about:blank 页面，不连接已有浏览器或个人会话。
+临时调试入口绑定本机；结束/取消清理自己的进程和临时配置。
+每次采集批次复用一个浏览器，页面之间重新导航。
 
-字符串接口使用宿主文档支持的函数文本调用方式。
-先滚动走查并等待字体，再在指定状态采集。
-探针不自动改变视口、滚动或状态；由宿主控制这些条件。
-
-## 保存并导入
-
-保存 observation 为运行目录 incoming 下的 JSON。
-它必须包含探针的 url、viewport、elements 等字段，不能只存截图分析。
-能保存截图时写入运行目录 evidence/screenshots。
+## 采集入口
 
 ```text
-<python> <skill>/scripts/design.py ingest --run <run-directory> --input <observation-file> --backend browser --state default --viewport-name desktop --screenshot <optional-local-file>
+<python> <skill>/scripts/design.py capture --run <run-directory>
 ```
 
-移动视口使用 mobile 标签，实际改变状态后使用对应 state 标签。
-截图路径必须在运行目录内；缺失时 coverage 显式标注。
-重复坐标默认不覆盖；查看结果后可用 --replace 更新该快照。
+--url 从已有 plan.pages 中选择一页；--viewport 选择已有视口名。
+默认最多1200个可见布局元素，标题/导航/输入/行动入口优先。
+--max-elements 允许1–5000；--max-matched 为实际规则/字体采样数量，默认80、允许0–500。
+--checkpoints 为1–4，默认3：顶部及分段滚动状态。
+每个视口默认最多24次分段滚动，重要资源有有限等待。
+已完成的坐标复用；缺少部分检查点时重新观察并补缺，旧坐标默认保持。
 
-## Firecrawl 连接器
+## 交互状态
 
-连接器遵循实际工具合同，不猜工具名和字段。
-branding 为初提取；实测通过 executeJavascript、Interact 或 Browser 跑共用探针。
-保存 observation 后用同一 ingest 命令，backend 设 firecrawl-connector。
-连接器缺少浏览器代码能力时，保留品牌摘要，改用宿主浏览器补齐。
-Markdown 或 branding 不能伪装成探针输出。
+```text
+<python> <skill>/scripts/design.py capture --run <run-directory> --viewport desktop --state hover --selector <selector>
+<python> <skill>/scripts/design.py capture --run <run-directory> --viewport desktop --state focus --selector <selector>
+```
+
+只支持明确的 default/hover/focus，不执行表单提交、交易或任意点击脚本。
+hover 移动鼠标到目标中心；focus 请求目标焦点。采集后的样式是观测状态。
+选择器必须匹配本次页面中的元素；选不到时失败，不替换成别的目标。
+展开、登录或业务状态不在当前自动采集范围，记录未验证。
+
+## 证据与恢复
+
+Node 将快照暂存，Python 验证来源、视口、图片及样式表摘要后提交。
+JPEG 截图用于视觉核对，不能作为无损像素相等的裁判。
+观察、截图和原始 CSS 按内容哈希存储；index 原子更新。
+页面/状态失败时保存已成功结果，记录 failures；退出码2表示需要恢复。
+浏览器被取消或超时时尝试先终止并清理自己的进程。
+
+```text
+<python> <skill>/scripts/design.py capture --run <run-directory> --url <planned-url> --viewport mobile
+<python> <skill>/scripts/design.py capture --run <run-directory> --refresh
+```
+
+refresh 更新成功坐标，仍保留旧内容文件；旧模型随后需重新 build 并合并解释。
+更改计划、状态或页面后，不用旧 coverage 冒充当前覆盖。
+旧版运行数据仍可读，但不保留旧版云端/宿主采集入口；系统中既存凭据不操作。

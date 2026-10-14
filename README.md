@@ -2,19 +2,18 @@
 
 # SpecKit
 
-把网站的视觉语言，整理成有来源依据的设计文件和本地预览。
-
+把网站的视觉语言整理为有来源依据的设计文件和本地预览。
 展示名称为 **SpecKit**，安装标识与 Skill 目录名为 `speckit`。
 
-![自动测试样例：深色文字、白色表面、16px/24px 排版与 6px 圆角](assets/readme/specimen.svg)
+![测试样例的排版、颜色与圆角示意](assets/readme/specimen.svg)
 
-上图是自动测试样例的 SVG 示意，数值来自实际导出器：文字色 `#171717`、字号/行高 `16px / 24px`、间距 `12px / 16px`、圆角 `6px`。每个值保留来源引用；此样例用于说明输出结构。
+同一份设计模型导出文档、样式和可预览文件；原始CSS、元素计算样式、匹配候选和用途解释分别保存。
 
-[开始使用](#开始使用) · [交付文件](#交付文件) · [采集方式](#采集方式) · [适用边界](#适用边界)
+[开始使用](#开始使用) · [交付文件](#交付文件) · [采集与边界](#采集与边界) · [开发与来源](#开发与来源)
 
 ## 开始使用
 
-让 Agent 安装，复制这句话：
+让 Agent 安装：
 
 ```text
 请帮我安装这个 Skill：https://github.com/Yohoia/yoho-speckit
@@ -26,104 +25,82 @@
 npx skills add Yohoia/yoho-speckit --skill speckit
 ```
 
-安装后，向 Agent 提出第一个请求：
+安装前准备 **Python 3.10+、Node.js 22+、Chrome/Chromium**。
+采集只使用本地浏览器的CDP接口，无需npm依赖、SDK或API Key。
+浏览器不在默认位置时，设置 `SPECKIT_CHROME_PATH` 为可执行文件路径。
+运行 `python3 scripts/design.py doctor` 可检查依赖；Windows使用 `py -3`。
+
+首次请求示例：
 
 ```text
 提取这个网站的设计规范，生成 DESIGN.md 和可预览的样式文件：<网址>。只分析这一个页面。
 ```
 
-CLI 安装需要 Node.js。手动安装时，把仓库根目录复制为 Agent 的 `speckit` Skill 文件夹；支持本地路径的环境也可直接引用 [SKILL.md](SKILL.md)。无需预装 Firecrawl Skill。
+手动安装时，把本仓库复制为 Agent 的 `speckit` Skill 文件夹；也可直接引用 [SKILL.md](SKILL.md)。
+依赖安装由用户选择，Skill不会自动安装软件或更改个人浏览器配置。
 
 ## 交付文件
 
-输出保存在 Skill 外部的新目录，整个目录可搬移。
+输出保存在Skill外部的新目录，整个目录可搬移。
 
 | 文件 | 用途 |
 | --- | --- |
 | `DESIGN.md` / `DESIGN.compact.md` | 完整与精简设计参考 |
 | `tokens.css` / `tokens.compact.css` | CSS Variables：完整分类 / 颜色与字体 |
 | `tailwind.css` / `tailwind.compact.css` | Tailwind v4：完整主题 / 颜色与字体 |
-| `design-tokens.json` / `design-tokens.compact.json` | 面向 CSS 的 Design Tokens：完整 / 精简分类 |
-| `preview.html` | 双栏样式参考，切换格式、复制与下载 |
-| `design.json` / `evidence/` | 可编辑数据、原始观察、截图与覆盖记录 |
+| `design-tokens.json` / `design-tokens.compact.json` | CSS方向的Design Tokens交换文件 |
+| `preview.html` | 双栏参考页，四格式切换、复制与下载 |
+| `design.json` / `evidence/` | 可编辑模型、观察、截图、原始CSS及覆盖记录 |
 
-预览内嵌数据，无需远程脚本、CDN 或 Tailwind；可在允许打开本地文件的浏览器中使用。验证结果记录于 `verification.json`，导出清单记录于 `export-manifest.json`。
+预览内嵌HTML/CSS/JS、展示字体与头像，无远程脚本或CDN依赖。
+左侧为标题与源站链接、简介、Color Palette、Typography、Spacing & Shape、Guidelines；不展示采集截图。
+四格式都有Compact/Extended。文档到Elevation/Surfaces结束，未确认项和证据保存在数据文件中。
+单色导出为支持范围内的hex，透明色保留alpha；渐变标签显示Gradient，执行文件保留完整定义。
+宽色域裁剪单独标记，未支持颜色保留原值并报告转换缺口。
 
-预览左侧依次为标题与简介、Color Palette、Typography、Spacing & Shape、Guidelines；四种格式都可切换 Compact/Extended。文档按字体、字号和间距用途分组，组件使用自然语言说明；Extended 到 Elevation、Compact 到 Surfaces 结束。证据与未确认项保留在独立数据文件中。
+## 采集与边界
 
-## 采集方式
+![工作流程：采集证据、解释用途、统一导出与验证](assets/readme/workflow.svg)
 
-![工作流程：采集证据、解释用途、从同一模型导出并验证](assets/readme/workflow.svg)
+**唯一采集方案是本地Chrome/Chromium＋CDP。** 一个批次复用一个隔离的无头浏览器，临时用户配置不包含个人登录态；完成后清理自己的浏览器与配置。
 
-DOM 计算样式与源 CSS 声明保留测量依据，Agent 解释名称、用途与设计建议；全部导出共用一份 `design.json`。
+- **页数**：single仅输入页；standard通常3个代表页、最多5页；extended使用用户给定上限。没有新增信息可提前停止。
+- **视口**：默认桌面1440×1000、窄屏390×844，按CSS视口测量；不宣称模拟真实手机硬件。
+- **走查**：默认3个滚动检查点，每个视口最多24步；采样、就绪和页尾检查都有预算，未完整观察会记录缺口。
+- **元素**：默认最多1200项，代表标题、导航、输入和行动入口优先；真实规则/字体默认采样80个代表元素，预算可调整。
+- **状态**：支持default、滚动检查点，以及指定元素的hover/focus。展开、登录和业务状态不自动执行，未观察状态保持未验证。
+- **来源**：计算样式证明当时的数值；匹配规则是候选，不直接等于层叠获胜声明。字体栈与实际渲染字体分开记录。
+- **覆盖**：Canvas/WebGL、Shadow DOM/iframe及未加载内容可能无法全面测量；不能因此声称恢复了完整官方设计系统。
+- **数据**：证据留在本地，页面正常访问其资源服务器；不将观察发给额外的云端提取服务。原始CSS不被改写，字体文件默认不再分发。
+- **恢复**：原始观察和截图按内容哈希存储，成功后更新账本；失败保留成功坐标。再次build产生候选，保留人工解释。
 
-核心需要 **Python 3.10+**，只使用标准库。采集需要至少一条可用路线：能读取 DOM 与计算样式的宿主浏览器、Firecrawl 连接器、已有 CLI，或 HTTP API。API 路线无需安装 Firecrawl CLI/SDK。
-
-修改 `design.json` 后重新导出。再次 `build` 生成候选，保留已有人工解释；采集失败保留成功快照，可恢复后继续。操作细节见 [主流程](SKILL.md) 与 [交付规范](references/delivery.md)。
-
-单色导出统一使用 hex，透明色保留 alpha；Oklab 等单色转换为 sRGB hex。渐变在预览与文档表格中显示 `Gradient`，CSS 和 JSON 中保留可执行定义与 hex 色标。原始颜色表达留在证据中；宽色域转换的裁剪会另行标记。
-
-<details>
-<summary>可选：配置 Firecrawl API 凭据</summary>
-
-优先复用运行时 `FIRECRAWL_API_KEY` 或宿主安全入口。缺少安全入口时，可使用本地凭据页；要求 Node.js 22.18+ 与系统凭据服务。
-
-在 Skill 根目录执行：
-
-```bash
-cd scripts/credential-ui
-npm ci --ignore-scripts
-node src/profile.ts setup firecrawl
-```
-
-用户亲自打开返回的本机链接并保存 Key；密钥存入系统凭据库，不需贴进聊天。凭据声明和存储引用兼容此前保存的 Key，Skill 改名不会迁移或删除凭据。
-
-凭据页和 Node.js 是可选配置，宿主浏览器路线不需要它们。更多说明见 [凭据组件](scripts/credential-ui/README.md) 与 [Firecrawl 适配](references/firecrawl.md)。
-
-</details>
-
-## 适用边界
-
-- **页数**：`single` 仅输入页；默认 `standard` 通常选 3 个代表页、最多 5 页；`extended` 使用用户指定上限。没有新增设计信息可提前停止。
-- **状态**：每页默认观察桌面与移动。Firecrawl 批采集器只自动采 `default`；hover、focus、展开状态需由浏览器或连接器补采。
-- **证据**：未捕获截图、字体未加载、采样截断、Canvas/WebGL 无法逐元素测量等缺口会单独记录。实测、推断、补全与未知项分别标注。
-- **适用范围**：默认同源公开页面，登录或跨源需明确指定；不承诺全站完整，也不恢复私有源码或未观察到的官方规范。
-- **数据与收费**：本地浏览器证据留在本地；云端路线把目标 URL 与采集代码发给 Firecrawl，不上传本地文件或浏览器登录态。服务按其额度与规则收费，不自动购买额度。
-- **兼容性**：开发平台为 macOS；Windows/Linux 未做端到端实机验证。字体栈不等于字体文件，特定设计工具的 JSON 导入未验证，Tailwind 文件需已有构建环境。
-
-程序验证检查实测引用和导出一致性；浏览器交互、人工视觉确认与自动触发准确率需分别验证。输出默认留在本地，不自动发布。
+只采审核后的公开页面范围。截图为JPEG视觉证据，不作无损像素相等的判据。
+macOS已实测；Windows/Linux的依赖发现已实现，端到端实机未验证。Tailwind文件需要用户已有构建环境，特定设计工具导入未验证。
+详细命令见 [主流程](SKILL.md)、[本地浏览器](references/browser.md) 与 [交付规范](references/delivery.md)。
 
 ## 开发与来源
 
-项目按职责组织：
-
 | 路径 | 职责 |
 | --- | --- |
-| `SKILL.md` | Agent 的执行入口 |
-| `references/` | 采集、后端适配、数据与交付规范，按主流程读取 |
-| `scripts/design.py` / `capture_firecrawl.py` | 核心命令入口 / 可选 Firecrawl 采集器 |
-| `scripts/common.py` / `model.py` | 计划、证据账本与数据建模校验 |
-| `scripts/colors.py` / `reference.py` / `documents.py` / `exporter.py` | 颜色转换、展示摘要、文档生成与统一导出 |
-| `assets/preview.html` / `preview.css` / `preview.js` | 预览的结构、样式与交互源码 |
-| `assets/` 下的字体、头像与许可 | 导出器内嵌的资源及其授权说明 |
+| `SKILL.md` / `references/` | 执行入口与按阶段读取的规范 |
+| `scripts/design.py` | doctor、init、capture、build、export、verify统一入口 |
+| `scripts/capture.py` | 计划、预算、恢复与证据提交 |
+| `scripts/capture_browser.mjs` / `cdp.mjs` | 浏览器采集 / 隔离进程与协议传输 |
+| `scripts/common.py` / `model.py` | 证据账本、候选归并与数据验证 |
+| `scripts/colors.py` / `reference.py` / `documents.py` / `exporter.py` | 颜色、展示摘要、文档与导出 |
+| `assets/probe.js` | 共用DOM与计算样式探针 |
+| `assets/preview.html` / `preview.css` / `preview.js` | 预览源码；导出时内嵌 |
 | `assets/readme/` | 仓库首页插图 |
-| `scripts/credential-ui/` | 可选凭据组件，含源码、浏览器运行文件、声明、锁文件与测试 |
-| `tests/` | 核心流程回归测试 |
-
-修改预览时编辑三份源码；导出器将 CSS、JS、字体与头像内嵌到最终 `preview.html`，交付时无需携带这三份源码或安装前端依赖。字体和头像只维护独立资源文件。
-
-在仓库根目录运行：
+| `tests/` / `evals/` | 核心/真实浏览器回归，以及固定效果评估请求 |
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -B -m unittest discover -s tests -v
 ```
 
-凭据组件的检查、构建、测试与原生测试见其 [README](scripts/credential-ui/README.md)；原生测试使用随机假凭据并清理。
+浏览器测试只访问本地fixture；无Node/Chrome时明确skip，不冒充端到端验证。
+`.DS_Store`、`__pycache__/`和临时运行缓存可清理；运行产物与评审报告位于Skill外部。
 
-`.DS_Store`、`__pycache__/`、`*.pyc`、`node_modules/` 和临时构建缓存可删除或重新生成，已由 `.gitignore` 排除。使用 `python3 -B -m unittest discover -s tests -v` 可避免测试产生 Python 缓存。运行产物与评审记录放在 Skill 外部。
+0.2版移除了旧版云端和宿主采集分支。旧证据与模型仍可读取，但新采集只走CDP；既存系统凭据不迁移、不删除。
+Design Tokens自有扩展保留历史命名空间 `org.yoho-design-extractor`，以兼容已生成文件。
 
-保留凭据组件的 `public/app.js`：它由 `web/app.ts` 构建，但用户首次运行需要它；同时保留 `package-lock.json`、`component.json`、测试和许可证。`.git/` 保存版本记录，不属于清理对象。
-
-Design Tokens 的自有 JSON 扩展继续使用历史命名空间 `org.yoho-design-extractor`，以兼容已生成文件。
-
-采用 [MIT 许可](LICENSE)。方法参考 [website-rebuild](https://github.com/boyang-hu/website-rebuild-skill) 的证据留存与 [Refero](https://styles.refero.design/) 的展示结构；可选凭据组件来自 oil-skill-creator，保留源码、测试与 [MIT 许可](scripts/credential-ui/LICENSE)。Firecrawl 与 Tailwind 的服务和构建能力由各自项目提供。
+采用 [MIT许可](LICENSE)。取证、走查和验收方法参考 [website-rebuild](https://github.com/boyang-hu/website-rebuild-skill)，展示结构参考 [Refero](https://styles.refero.design/)。本地采集脚本为项目独立实现。

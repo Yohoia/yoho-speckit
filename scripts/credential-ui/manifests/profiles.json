@@ -1,6 +1,0 @@
-{
-  "version": 1,
-  "profiles": {
-    "firecrawl": [{"manifest": "default.json", "env": "FIRECRAWL_API_KEY"}]
-  }
-}

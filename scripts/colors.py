@@ -138,6 +138,10 @@ def normalize_css(value):
 def conversion_info(value):
     if not isinstance(value,str):return {}
     samples=[value] if rgba(value)[0] is not None else [m[0] for m in FUNCTION.finditer(value)]
+    unsupported=[sample for sample in samples if rgba(sample)[0] is None]
+    if not samples and not re.search(r'#[0-9a-f]{3,8}\b',normalize_css(value),re.I):unsupported=[value]
     clipped=[sample for sample in samples if rgba(sample)[1]]
-    return {'encoding':'sRGB hex (8-bit channels)', 'gamutClipped':bool(clipped),
-            'clippedSourceColors':clipped}
+    return {'status':'unsupported' if unsupported else 'converted',
+            'encoding':None if unsupported else 'sRGB hex (8-bit channels)',
+            'gamutClipped':None if unsupported else bool(clipped),
+            'unsupportedSourceColors':unsupported,'clippedSourceColors':clipped}

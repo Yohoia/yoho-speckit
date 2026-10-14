@@ -141,6 +141,7 @@ function renderFonts(){
     const name=make('button',undefined,'font-name');name.style.fontFamily='var('+t.cssVariable+')';name.append(make('span',summary.name));name.title='Click to copy';name.onclick=()=>copy(family);
     row.append(make('span',eyebrow,'font-eyebrow'),name);
     const stats=make('div',undefined,'font-stats');[['Weight',weights],['Sizes',sizes],['Line height',lines],['Letter spacing',tracking],['Fallback',summary.fallback]].forEach(([k,v])=>{const item=make('div',undefined,'font-stat');item.append(make('span',k),make('span',v));stats.append(item)});
+    if(summary.renderedFonts?.length){const item=make('div',undefined,'font-stat');item.append(make('span','Rendered'),make('span',summary.renderedFonts.join(', ')));stats.append(item)}
     row.append(stats,make('p',t.role||'用途待解释','font-role'));container.append(row);
   });
   if(!container.children.length)container.append(make('p','未在已采范围确认。','empty'));

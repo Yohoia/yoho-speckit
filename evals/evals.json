@@ -1,0 +1,34 @@
+{
+  "skill_name": "speckit",
+  "evals": [
+    {
+      "id": 1,
+      "name": "design-evidence",
+      "prompt": "使用指定版本的 Skill，从 tests/fixtures/design.html 构造的本地公开测试页提取桌面与移动设计规范，保留证据并导出九份文件。核对空 content 伪元素、胶囊圆角、匹配规则与实际字体。",
+      "expected_output": "数值与视口/状态证据一致，来源规则不误配，九份导出文件可验证。",
+      "files": [
+        "../tests/fixtures/design.html"
+      ],
+      "expectations": [
+        "采到空 content 伪元素的渐变",
+        "科学计数法圆角进入 Token",
+        "未匹配/未生效同色规则不标为来源",
+        "桌面与移动字号差异保留",
+        "九份导出文件通过 verify"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "capture-recovery",
+      "prompt": "检查指定版本 Skill 的成功快照恢复、重复采集、计划改变和失败刷新；使用受控输入，保留旧证据，不读取或修改真实凭据。",
+      "expected_output": "已完成坐标可复用；失败提交保留成功证据；计划变化令旧覆盖失效。",
+      "files": [],
+      "expectations": [
+        "重复采集不重复写成功坐标",
+        "失败刷新不破坏旧截图与观察",
+        "计划改变后旧 coverage 不会继续通过",
+        "旧 design.json 不被候选覆盖"
+      ]
+    }
+  ]
+}

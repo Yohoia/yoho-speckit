@@ -12,7 +12,7 @@ TYPES = dict(color='color', gradient='gradient', font='fontFamily', typography='
 NARRATIVE_SECTIONS = (('imagery','Imagery'),('layout','Layout'),
     ('agentPromptGuide','Agent Prompt Guide'),('signatureRules','Signature Rules'),
     ('similarBrands','Similar Brands'))
-LENGTH = re.compile(r'-?(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|%|vh|vw|dvh|dvw|svh|svw|lvh|lvw|ch|ex|vmin|vmax|cqw|cqh|pt|pc|cm|mm|in)$')
+LENGTH = re.compile(r'-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:px|rem|em|%|vh|vw|dvh|dvw|svh|svw|lvh|lvw|ch|ex|vmin|vmax|cqw|cqh|pt|pc|cm|mm|in)$')
 
 
 def safe_css(value):
@@ -54,11 +54,13 @@ def build(run):
     evidence = {}
     components = []
     component_seen = set()
+    rejected = defaultdict(int)
 
     def add(category, value, row, el, prop):
         try:
             validate_value(category,value)
         except ValueError:
+            rejected[category] += 1
             return
         key = digest(value)[:12]
         evid = row['id'] + ':' + el['id'] + ':' + prop
@@ -84,6 +86,9 @@ def build(run):
             for edge in ('Top', 'Right', 'Bottom', 'Left'):
                 if nonzero(s.get('border' + edge + 'Width')) and s.get('border' + edge + 'Color'):
                     add('color', s['border' + edge + 'Color'], row, el, 'border' + edge + 'Color')
+            if el['tag'] in {'svg','path','circle','rect','polygon','text'}:
+                for prop in ('fill','stroke'):
+                    if nonzero(s.get(prop)) and 'url(' not in s[prop]:add('color',s[prop],row,el,prop)
             if 'gradient(' in s.get('backgroundImage', ''): add('gradient', s['backgroundImage'], row, el, 'backgroundImage')
             if el.get('hasText') and all(s.get(p) for p in TYPE_PROPS):
                 add('font', s['fontFamily'], row, el, 'fontFamily')
@@ -100,7 +105,7 @@ def build(run):
                 if nonzero(ps.get('boxShadow')):add('shadow',ps['boxShadow'],row,el,pseudo+'.boxShadow')
             kind = 'button' if el.get('role') == 'button' else 'input' if el['tag'] in {'input','textarea','select'} else 'navigation' if el['tag'] == 'nav' else None
             if kind:
-                fingerprint = digest([kind, s.get('backgroundColor'), s.get('borderTopColor'), s.get('borderTopLeftRadius'), s.get('fontSize')])
+                fingerprint = digest([kind, row['state'], row['viewport'], s.get('backgroundColor'), s.get('borderTopColor'), s.get('borderTopLeftRadius'), s.get('fontSize')])
                 if fingerprint not in component_seen and len(components) < 16:
                     component_seen.add(fingerprint)
                     evid = row['id'] + ':' + el['id'] + ':element'
@@ -116,6 +121,8 @@ def build(run):
         if len(values) > LIMITS[category]: omitted[category] = len(values) - LIMITS[category]
     used = {ref for item in tokens + components for ref in item['evidenceIds']}
     cov['omittedTokenCandidates'] = omitted
+    cov['rejectedTokenCandidates'] = dict(rejected)
+    if rejected:cov['gaps'].append('Some computed candidates could not be serialized; see rejectedTokenCandidates')
     if omitted: cov['gaps'].append('Candidate token limits reached; raw observations retain omitted values')
     model = {'schemaVersion':1, 'siteName': observations[0].get('title') or observations[0]['url'],
         'sourceUrl':read_json(run/'plan.json')['originalUrl'], 'generatedAt':now(),
@@ -145,6 +152,9 @@ def validate_model(model, run):
     stored = {s['id']:s for s in model['coverage']['snapshots']}
     if actual != stored:
         raise ValueError('模型证据快照过期；重新 build 并合并解释')
+    if model['coverage'].get('planSha256') not in {None,cov['planSha256']} or any(
+        model['coverage'].get(key)!=cov.get(key) for key in ('plannedPages','missing','selectionNotes','failures')):
+        raise ValueError('模型采集计划或覆盖信息过期；重新 build 并合并解释')
     refs = {}
     for e in model.get('evidence', []):
         if e['id'] in refs or e['snapshotId'] not in actual:

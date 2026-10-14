@@ -13,12 +13,14 @@
     'gridTemplateRows', 'alignItems', 'justifyContent', 'transitionProperty',
     'transitionDuration', 'transitionTimingFunction', 'animationName',
     'animationDuration', 'animationTimingFunction', 'backdropFilter', 'outlineColor',
-    'outlineWidth', 'outlineStyle', 'outlineOffset'
+    'outlineWidth', 'outlineStyle', 'outlineOffset', 'fill', 'stroke'
   ];
+  const gaps = [];
   const maxElements = Math.max(1, Math.min(5000, Number(options.maxElements) || 600));
   const sensitive = /token|secret|password|signature|session|authorization|api.?key|^code$|jwt/i;
   const safeUrl = value => {
     try {
+      if (!value) return null;
       const u = new URL(value, location.href);
       if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) return null;
       if ([...u.searchParams.keys()].some(k => sensitive.test(k))) return null;
@@ -47,6 +49,9 @@
     const s = getComputedStyle(el), r = el.getBoundingClientRect();
     return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
   });
+  const priority = el => el === document.documentElement || el === document.body ? 0 :
+    el.matches('h1,h2,h3,nav,button,input,textarea,select,a,[role=button]') ? 1 : el.matches('svg,path,circle,rect,polygon') ? 3 : 2;
+  candidates.sort((a,b) => priority(a)-priority(b));
   const elements = candidates.slice(0, maxElements).map((el, index) => {
     const rect = el.getBoundingClientRect(), tag = el.tagName.toLowerCase();
     // Leaf text avoids duplicate container copy; form values are never collected.
@@ -55,7 +60,7 @@
     const pseudos = {};
     for (const name of ['::before', '::after']) {
       const style = css(el, name);
-      if (style.content && !['none', 'normal', '""'].includes(style.content)) pseudos[name] = style;
+      if (style.content && !['none', 'normal'].includes(style.content)) pseudos[name] = style;
     }
     const styleDeclarations = {};
     for (const name of el.style) {
@@ -80,7 +85,7 @@
         for (const name of rule.style) {
           const value = rule.style.getPropertyValue(name).trim();
           if (name.startsWith('--')) sourceVariables.push({name, value, selector: rule.selectorText || '', href, context});
-          if (name.startsWith('--') || /^(font|line-height|letter-spacing|background|border-radius|box-shadow|gap|padding|margin|max-width|transition|animation)/.test(name)) values[name] = value;
+          if (name.startsWith('--') || /^(color|fill|stroke|font|line-height|letter-spacing|background|border|box-shadow|gap|padding|margin|max-width|transition|animation)/.test(name)) values[name] = value;
         }
         if (Object.keys(values).length) {
           sourceRules.push({selector: rule.selectorText || '', href, context, values}); declarationCount++;
@@ -103,14 +108,20 @@
     const value = rootStyle.getPropertyValue(variable.name).trim();
     if (value) rootVariables[variable.name] = value;
   }
+  let declaredFonts=[];
+  try { declaredFonts=Array.from(document.fonts).map(f=>({family:f.family,weight:f.weight,style:f.style,status:f.status})).slice(0,100); }
+  catch { gaps.push('font declaration enumeration unavailable'); }
+  const shadowRoots=candidates.filter(el=>el.shadowRoot).length;
+  if(shadowRoots)gaps.push('Shadow DOM contents require separate inspection');
+  if(document.querySelectorAll('iframe').length)gaps.push('iframe contents not included in this document probe');
   return {
     schemaVersion: 1, url: safeUrl(location.href), title: document.title,
     capturedAt: new Date().toISOString(), method: 'dom-computed-style',
     viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio},
     scroll: {x: scrollX, y: scrollY, height: document.documentElement.scrollHeight},
     theme: {colorScheme: rootStyle.colorScheme, rootBackground: rootStyle.backgroundColor},
-    fontStatus: document.fonts.status,
-    declaredFonts: [...document.fonts].map(f => ({family:f.family, weight:f.weight, style:f.style, status:f.status})).slice(0,100),
+    fontStatus: document.fonts?.status || 'unknown',
+    declaredFonts, gaps, shadowRoots,
     sampling: {total: candidates.length, captured: elements.length, truncated: candidates.length > maxElements, declarationsTruncated},
     elements, links, sourceVariables, rootVariables, sourceRules, inaccessibleStylesheets,
     canvasCount: document.querySelectorAll('canvas').length
