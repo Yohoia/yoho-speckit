@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="636" viewBox="0 0 1200 636" role="img" aria-labelledby="title desc">
+  <title id="title">从样式测量到带证据的导出</title>
+  <desc id="desc">自动测试样例的真实导出片段：文字色 rgb(23, 23, 23)，字号16px、行高24px，间距12px与16px，圆角6px。每个值都保留元素与属性的证据引用。图为输出结构示意，不是公网网站截图。</desc>
+  <rect width="1200" height="636" rx="20" fill="#F7F5F0"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif">
+    <text x="56" y="64" fill="#18212B" font-size="40" font-weight="600" letter-spacing="-1">样式有数值，也有出处。</text>
+    <text x="56" y="102" fill="#69727D" font-size="21">自动测试样例 · 实际导出值的视觉整理</text>
+    <g id="measured-specimens" transform="translate(56 140)">
+      <rect width="520" height="432" rx="14" fill="#FFFFFF"/>
+      <text x="28" y="43" fill="#69727D" font-size="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">01 / MEASURED VALUES</text>
+      <line x1="28" y1="63" x2="492" y2="63" stroke="#E8E6E1"/>
+      <rect x="28" y="87" width="76" height="76" rx="6" fill="#171717"/>
+      <rect x="116" y="87" width="76" height="76" rx="6" fill="#FFFFFF" stroke="#DEDCD7"/>
+      <text x="222" y="117" fill="#171717" font-size="29" font-weight="550">Color</text>
+      <text x="222" y="150" fill="#69727D" font-size="22" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">#171717 · #FFFFFF</text>
+      <text x="28" y="234" fill="#171717" font-size="62" font-weight="400">Aa</text>
+      <text x="144" y="215" fill="#171717" font-size="29" font-weight="550">Typography</text>
+      <text x="144" y="248" fill="#69727D" font-size="22">16px / 24px · 400 &amp; 500</text>
+      <line x1="28" y1="279" x2="492" y2="279" stroke="#E8E6E1"/>
+      <text x="28" y="317" fill="#171717" font-size="27" font-weight="550">Spacing &amp; shape</text>
+      <rect x="28" y="340" width="54" height="40" rx="6" fill="#EEE8FC"/>
+      <rect x="96" y="340" width="74" height="40" rx="6" fill="#D7C9F7"/>
+      <text x="194" y="368" fill="#69727D" font-size="22">12px / 16px · radius 6px</text>
+    </g>
+    <g id="export-and-evidence" transform="translate(600 140)">
+      <rect width="544" height="432" rx="14" fill="#18212B"/>
+      <text x="28" y="43" fill="#B8A4F2" font-size="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">02 / TOKENS + EVIDENCE</text>
+      <line x1="28" y1="63" x2="516" y2="63" stroke="#3A434D"/>
+      <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">
+        <text x="28" y="113" fill="#FFFFFF">tokens.css</text>
+        <text x="28" y="155" fill="#C4CDD5">--color-sample-0e520786ff00:</text>
+        <text x="50" y="189" fill="#B8A4F2">rgb(23, 23, 23);</text>
+        <text x="28" y="243" fill="#FFFFFF">design-tokens.json</text>
+        <text x="28" y="285" fill="#C4CDD5">"$value": "rgb(23, 23, 23)"</text>
+        <text x="28" y="319" fill="#C4CDD5">"status": "observed"</text>
+      </g>
+      <line x1="28" y1="345" x2="516" y2="345" stroke="#3A434D"/>
+      <path d="M28 367V393H54M50 379H82" fill="none" stroke="#B8A4F2" stroke-width="2"/>
+      <text x="95" y="385" fill="#FFFFFF" font-size="23">#primary → color → 原始观察</text>
+    </g>
+    <text x="56" y="609" fill="#69727D" font-size="19">来源：tests/test_pipeline.py 的 observation；字号样本为放大展示，字体文件不随产物分发。</text>
+  </g>
+</svg>

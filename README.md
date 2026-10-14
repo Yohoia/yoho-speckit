@@ -1,85 +1,100 @@
+![yoho-design-extractor：从网站观察到设计文件](assets/readme/hero.svg)
+
 # yoho-design-extractor
 
-输入网站网址，得到有来源依据的设计参考：DESIGN.md、CSS、Tailwind v4、Design Tokens 和 Refero 式双栏预览。
+把网站的视觉语言，整理成有来源依据的设计文件和本地预览。
 
-它解决两类常见问题：只看截图猜数值，以及不同导出格式互相矛盾。元素样式与原始证据保留，所有导出共用一份可编辑数据。
+![自动测试样例：深色文字、白色表面、16px/24px 排版与 6px 圆角](assets/readme/specimen.svg)
 
-## 安装
+上图是自动测试样例的 SVG 示意，数值来自实际导出器：文字色 `#171717`、字号/行高 `16px / 24px`、间距 `12px / 16px`、圆角 `6px`。每个值保留来源引用；此样例用于说明输出结构。
 
-可以直接让 Agent 安装，复制这句话：
+[开始使用](#开始使用) · [交付文件](#交付文件) · [采集方式](#采集方式) · [适用边界](#适用边界)
+
+## 开始使用
+
+让 Agent 安装，复制这句话：
 
 ```text
 请帮我安装这个 Skill：https://github.com/Yohoia/yoho-design-extractor
 ```
 
-也可通过 Skills CLI 安装：
+也可使用 Skills CLI：
 
 ```bash
 npx skills add Yohoia/yoho-design-extractor --skill yoho-design-extractor
 ```
 
-命令安装需要 Node.js；Skill 核心运行只需要 Python 3.10+ 和可用的采集能力。本仓库根层就是完整 Skill，手动安装时将本目录复制到你的 Agent 支持的 Skill 目录，并将安装文件夹命名为 yoho-design-extractor；也可在支持本地路径的环境中直接引用根层 SKILL.md。无需提前安装 Firecrawl Skill。
-
-## 使用
-
-示例请求：
-- “提取这个网站的设计规范，生成 DESIGN.md 和可预览的样式文件：<网址>。”
-- “只分析这一个页面。”
-- “扩展分析最多 8 页，包含产品和文档。”
-
-默认通常 3 个代表页、最多 5 页；只有不同结构提供新设计信息时才增加页面。单页站可以提前停止。每页默认观察桌面与移动，实际交互状态另计。
-
-## 首次配置
-
-优先复用宿主浏览器、已连接的 Firecrawl 或已有 CLI。HTTP API 适配器只用 Python 标准库，不需要安装 Firecrawl CLI/SDK。
-
-云端 API 可复用运行时 FIRECRAWL_API_KEY。没有安全入口时，随附可选凭据页把用户亲自填写的 Key 保存到系统凭据服务；不会要求把 Key 贴进聊天。
-
-凭据页要求 Node.js 22.18+，首次在 scripts/credential-ui 目录安装依赖：
+安装后，向 Agent 提出第一个请求：
 
 ```text
+提取这个网站的设计规范，生成 DESIGN.md 和可预览的样式文件：<网址>。只分析这一个页面。
+```
+
+CLI 安装需要 Node.js。手动安装时，把仓库根目录复制为 Agent 的 `yoho-design-extractor` Skill 文件夹；支持本地路径的环境也可直接引用 [SKILL.md](SKILL.md)。无需预装 Firecrawl Skill。
+
+## 交付文件
+
+输出保存在 Skill 外部的新目录，整个目录可搬移。
+
+| 文件 | 用途 |
+| --- | --- |
+| `DESIGN.md` / `DESIGN.compact.md` | 完整与精简设计参考 |
+| `tokens.css` | CSS Variables |
+| `tailwind.css` | Tailwind v4 主题与额外变量 |
+| `design-tokens.json` | 面向 CSS 的 Design Tokens 交换文件 |
+| `preview.html` | 双栏样式参考，切换格式、复制与下载 |
+| `design.json` / `evidence/` | 可编辑数据、原始观察、截图与覆盖记录 |
+
+预览内嵌数据，无需远程脚本、CDN 或 Tailwind；可在允许打开本地文件的浏览器中使用。验证结果记录于 `verification.json`，导出清单记录于 `export-manifest.json`。
+
+## 采集方式
+
+![工作流程：采集证据、解释用途、从同一模型导出并验证](assets/readme/workflow.svg)
+
+DOM 计算样式与源 CSS 声明保留测量依据，Agent 解释名称、用途与设计建议；全部导出共用一份 `design.json`。
+
+核心需要 **Python 3.10+**，只使用标准库。采集需要至少一条可用路线：能读取 DOM 与计算样式的宿主浏览器、Firecrawl 连接器、已有 CLI，或 HTTP API。API 路线无需安装 Firecrawl CLI/SDK。
+
+修改 `design.json` 后重新导出。再次 `build` 生成候选，保留已有人工解释；采集失败保留成功快照，可恢复后继续。操作细节见 [主流程](SKILL.md) 与 [交付规范](references/delivery.md)。
+
+<details>
+<summary>可选：配置 Firecrawl API 凭据</summary>
+
+优先复用运行时 `FIRECRAWL_API_KEY` 或宿主安全入口。缺少安全入口时，可使用本地凭据页；要求 Node.js 22.18+ 与系统凭据服务。
+
+在 Skill 根目录执行：
+
+```bash
+cd scripts/credential-ui
 npm ci --ignore-scripts
 node src/profile.ts setup firecrawl
 ```
 
-无需云端服务时可使用宿主浏览器，凭据页和 Node.js 都不是核心运行前提。云端采集按 Firecrawl 的服务额度与收费规则执行，不自动购买额度。
+用户亲自打开返回的本机链接并保存 Key；密钥存入系统凭据库，不需贴进聊天。存储引用兼容此前保存的 Key，Skill 改名不会迁移或删除凭据。
 
-系统凭据引用保留原有存储标识以兼容此前保存的 Key；Skill 改名不会迁移或删除凭据。
+凭据页和 Node.js 是可选配置，宿主浏览器路线不需要它们。更多说明见 [凭据组件](scripts/credential-ui/README.md) 与 [Firecrawl 适配](references/firecrawl.md)。
 
-## 输出与修改
+</details>
 
-产物保存到 Skill 外部的新目录，包含六个交付文件、design.json 和 evidence。preview.html 可直接打开，切换文档/代码、复制或下载。
+## 适用边界
 
-修改 design.json 后重新生成导出；再次采集不会覆盖人工解释，build 会生成候选供合并。采集失败保留已完成快照。
+- **页数**：`single` 仅输入页；默认 `standard` 通常选 3 个代表页、最多 5 页；`extended` 使用用户指定上限。没有新增设计信息可提前停止。
+- **状态**：每页默认观察桌面与移动。Firecrawl 批采集器只自动采 `default`；hover、focus、展开状态需由浏览器或连接器补采。
+- **证据**：未捕获截图、字体未加载、采样截断、Canvas/WebGL 无法逐元素测量等缺口会单独记录。实测、推断、补全与未知项分别标注。
+- **适用范围**：默认同源公开页面，登录或跨源需明确指定；不承诺全站完整，也不恢复私有源码或未观察到的官方规范。
+- **数据与收费**：本地浏览器证据留在本地；云端路线把目标 URL 与采集代码发给 Firecrawl，不上传本地文件或浏览器登录态。服务按其额度与规则收费，不自动购买额度。
+- **兼容性**：开发平台为 macOS；Windows/Linux 未做端到端实机验证。字体栈不等于字体文件，特定设计工具的 JSON 导入未验证，Tailwind 文件需已有构建环境。
 
-## 兼容范围
+程序验证检查实测引用和导出一致性；浏览器交互、人工视觉确认与自动触发准确率需分别验证。输出默认留在本地，不自动发布。
 
-核心需要 Python 3.10+。macOS/Linux 通常用 python3，Windows 通常用 py -3；须先核对解释器。
+## 开发与来源
 
-采集至少需要一种可读 DOM 与计算样式的浏览器能力。随附 Firecrawl 批采集器只自动采默认状态；hover/focus/展开由 Agent 使用浏览器或连接器补充，并记录缺口。
+在仓库根目录运行：
 
-当前开发平台 macOS。其他操作系统未实机验证；凭据组件的 Windows/Linux 适配不代表本 Skill 已在这些平台通过端到端测试。浏览器界面与工具合同依宿主环境，核心文档不绑定某个宿主。
-
-## 数据边界
-
-本地浏览器路线保留本地证据；云端路线将目标 URL 与采集代码发送给 Firecrawl 并由其处理网页。不上传本地文件或浏览器登录态。
-
-默认分析公开页面，扩展同源范围；登录或跨源需要用户明确指定。输出留在本地，不自动发布或全局安装。不恢复私有源码、不承诺全站完整，也不生成未观察到的官方规范。
-
-字体栈不等于字体文件已分发；JSON 是 CSS 导向交换格式，特定设计工具的导入兼容性未验证。
-
-## 开发检查
-
-```text
+```bash
 python3 -m unittest discover -s tests -v
 ```
 
-可选凭据组件的 check/build/test/test:native 命令在组件 README 中说明。原生测试使用随机假凭据并清理，不使用用户业务 Key。
+凭据组件的检查、构建、测试与原生测试见其 [README](scripts/credential-ui/README.md)；原生测试使用随机假凭据并清理。
 
-静态检查、真实采集与行为评估分别报告；静态通过不证明自动触发准确率或审美质量。
-
-## 方法与来源
-
-参考 [website-rebuild](https://github.com/boyang-hu/website-rebuild-skill) 的证据留存思路、[Refero](https://styles.refero.design/) 的展示结构；未移植完整复刻管线或其源站内容。
-
-可选 credential-ui 组件来自 oil-skill-creator，保留随附源代码、测试与 MIT 许可。Firecrawl 与 Tailwind 的服务/构建能力属于各自项目。
+采用 [MIT 许可](LICENSE)。方法参考 [website-rebuild](https://github.com/boyang-hu/website-rebuild-skill) 的证据留存与 [Refero](https://styles.refero.design/) 的展示结构；可选凭据组件来自 oil-skill-creator，保留源码、测试与 [MIT 许可](scripts/credential-ui/LICENSE)。Firecrawl 与 Tailwind 的服务和构建能力由各自项目提供。

@@ -1,4 +1,44 @@
+# Operating-system and editor files
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python caches and environments
 __pycache__/
 *.py[cod]
-scripts/credential-ui/node_modules/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Node.js dependencies and build caches
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Generated builds, reports, and local runs
+dist/
+build/
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+*.log
+*.tmp
+/runs/
+/outputs/
+/artifacts/
+/workspace/
+/validation/
+
+# Local credentials and environment configuration
+.env
+.env.*
+!.env.example
+!.env.sample

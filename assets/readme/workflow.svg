@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Yoho Design Extractor：采集、解释、导出</title>
+  <desc id="desc">采集实际样式，解释设计用途，导出统一文件。流程从样式证据连接到同一份 design.json，再生成 Markdown、CSS 和 JSON 等文件；所有导出共用这份可编辑模型。</desc>
+
+  <rect width="1200" height="360" rx="24" fill="#F7F5F0"/>
+
+  <g id="workflow-heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif">
+    <text x="64" y="61" fill="#18212B" font-size="40" font-weight="600">从实测到统一交付</text>
+    <text x="1136" y="57" text-anchor="end" fill="#69727D" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">ONE DESIGN MODEL</text>
+  </g>
+
+  <g id="stage-labels" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif">
+    <g id="capture-label">
+      <text x="64" y="128" fill="#7653EA" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">01</text>
+      <text x="112" y="132" fill="#18212B" font-size="48" font-weight="600">采集</text>
+      <text x="112" y="171" fill="#69727D" font-size="26">实际样式</text>
+    </g>
+    <g id="interpret-label">
+      <text x="445" y="128" fill="#7653EA" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">02</text>
+      <text x="493" y="132" fill="#18212B" font-size="48" font-weight="600">解释</text>
+      <text x="493" y="171" fill="#69727D" font-size="26">设计用途</text>
+    </g>
+    <g id="export-label">
+      <text x="826" y="128" fill="#7653EA" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">03</text>
+      <text x="874" y="132" fill="#18212B" font-size="48" font-weight="600">导出</text>
+      <text x="874" y="171" fill="#69727D" font-size="26">统一文件</text>
+    </g>
+  </g>
+
+  <g id="evidence-sample">
+    <rect x="66" y="195" width="306" height="72" rx="5" fill="#F7F5F0" stroke="#DEDCD7" stroke-width="2"/>
+    <path d="M64 213V193H84 M354 193H374V213 M64 249V269H84 M354 269H374V249" fill="none" stroke="#7653EA" stroke-width="2.5"/>
+    <rect x="88" y="215" width="32" height="32" rx="6" fill="#7653EA"/>
+    <path d="M142 221H241 M142 241H315" fill="none" stroke="#69727D" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="374" cy="231" r="4" fill="#7653EA"/>
+  </g>
+
+  <g id="evidence-connections" fill="none" stroke="#7653EA" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M384 231H429 M420 223L429 231L420 239"/>
+    <path d="M770 231H814 M805 223L814 231L805 239"/>
+  </g>
+
+  <g id="shared-design-model">
+    <rect x="445" y="193" width="310" height="76" rx="10" fill="#7653EA"/>
+    <text x="600" y="243" text-anchor="middle" fill="#F7F5F0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="34" font-weight="600">design.json</text>
+  </g>
+
+  <g id="unified-files">
+    <rect x="826" y="193" width="286" height="60" rx="5" fill="#F7F5F0" stroke="#DEDCD7" stroke-width="2"/>
+    <rect x="838" y="201" width="286" height="60" rx="5" fill="#F7F5F0" stroke="#DEDCD7" stroke-width="2"/>
+    <rect x="850" y="209" width="286" height="60" rx="5" fill="#F7F5F0" stroke="#18212B" stroke-width="2"/>
+    <text x="993" y="249" text-anchor="middle" fill="#18212B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="26">MD · CSS · JSON</text>
+  </g>
+
+  <g id="shared-model-caption" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif">
+    <path d="M64 300H359 M841 300H1136" fill="none" stroke="#DEDCD7" stroke-width="2"/>
+    <text x="600" y="311" text-anchor="middle" fill="#18212B" font-size="28">所有导出，共用同一份模型</text>
+  </g>
+</svg>
