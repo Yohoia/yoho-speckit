@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { launch, chromePath, sleep } from './cdp.mjs';
+import { documentGuard, DocumentChanged } from './document_guard.mjs';
+import { createScrollWalk } from './scroll_walk.mjs';
 
 if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Node.js 22+ required');
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -47,16 +49,19 @@ async function main() {
   const unsubscribe=cdp.on(message=>{
     const p=message.params||{};
     if(message.method==='CSS.styleSheetAdded') sheets.set(p.header.styleSheetId,p.header);
+    if(message.method==='CSS.styleSheetRemoved') sheets.delete(p.styleSheetId);
     if(message.method==='Runtime.exceptionThrown') health.errors.push('page exception: '+(p.exceptionDetails?.text||'unknown'));
     if(message.method==='Log.entryAdded' && p.entry.level==='error') health.errors.push('browser log error: '+p.entry.source);
-    if(message.method==='Network.responseReceived' && p.response.status>=400) health.failures.push({url:publicUrl(p.response.url),status:p.response.status});
+    if(message.method==='Network.responseReceived' && p.response.status>=400) health.failures.push({url:publicUrl(p.response.url),status:p.response.status,type:p.type,frameId:p.frameId,loaderId:p.loaderId});
     if(message.method==='Network.responseReceived' && p.type==='Document')documents.push({frameId:p.frameId,loaderId:p.loaderId,url:publicUrl(p.response.url),status:p.response.status});
     if(message.method==='Network.loadingFailed' && !p.canceled) health.failures.push({error:p.errorText});
     if(message.method==='Inspector.targetCrashed') health.errors.push('renderer crashed');
     if(message.method==='Page.frameNavigated' && !p.frame.parentId) navigations++;
   });
+  const guard=documentGuard(cdp,request,()=>documents);
   try {
     for(const method of ['Page.enable','Runtime.enable','Network.enable','DOM.enable','CSS.enable','Log.enable','Inspector.enable']) await cdp.send(method);
+    await cdp.send('Emulation.setFocusEmulationEnabled',{enabled:true});
     const version=await cdp.send('Browser.getVersion');
     for(const job of request.jobs) {
       health={errors:[],failures:[]};sheets=new Map();navigations=0;documents=[];
@@ -74,71 +79,73 @@ async function main() {
         }
         const navigation=await cdp.send('Page.navigate',{url:job.url},30000);
         if(navigation.errorText) throw new Error('Navigation failed: '+navigation.errorText);
-        const deadline=Date.now()+request.readyTimeout;
-        let ready;
-        while(Date.now()<deadline) {
-          ready=await cdp.evaluate(`({state:document.readyState,fonts:document.fonts?.status||'unknown',images:[...document.images].filter(i=>!i.complete||!i.naturalWidth).length,url:location.href})`);
-          if(ready?.state==='complete' && ready.fonts==='loaded' && ready.url!=='about:blank') break;
-          await sleep(200);
-        }
-        if(!ready || !request.allowedOrigins.includes(new URL(ready.url).origin)) throw new Error('Final URL outside authorized scope');
-        const mainDocument=documents.findLast(d=>d.frameId===navigation.frameId && d.loaderId===navigation.loaderId);
-        if(!mainDocument)throw new Error('Main document HTTP status unavailable');
-        if(mainDocument.status>=400)throw new Error('Main document HTTP '+mainDocument.status+': '+mainDocument.url);
         await sleep(request.settleMs);
-        if (/just a moment|access denied|verify you are human/i.test(await cdp.evaluate('document.title'))) throw new Error('Challenge page; target not observed');
         const positions=job.state==='default' && request.checkpoints>1 ? Array.from({length:request.checkpoints},(_,i)=>i/(request.checkpoints-1)) : [0];
-        let walkComplete=false, steps=0;
+        const walk=createScrollWalk(cdp,request);
         for(let point=0;point<positions.length;point++) {
           failedState=point===0?(job.snapshotState||job.state):'scroll-'+String(point).padStart(2,'0');
-          if(point>0) {
-            while(steps<request.maxSteps) {
-              const g=await cdp.evaluate('({y:scrollY,h:innerHeight,total:document.documentElement.scrollHeight})');
-              const target=(g.total-g.h)*positions[point];
-              if(g.y>=target-2 || g.y+g.h>=g.total-2) break;
-              await cdp.evaluate(`scrollTo({top:Math.min(${target},scrollY+innerHeight*.85),behavior:'instant'})`);
-              steps++;await sleep(request.dwellMs);
+          for(let retry=0;retry<3;retry++) {
+            let identity;
+            try {
+              identity=await guard.ready();
+              const ready=identity.readiness;
+              walk.bind(identity);
+              await walk.to(positions[point],point>0,()=>guard.check(identity));
+              await guard.check(identity);
+              if(job.state!=='default') {
+                const rect=await cdp.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(job.selector)});if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+                if(!rect) throw new Error('State selector not found');
+                if(job.state==='hover') await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...rect});
+                else {
+                  const root=await cdp.send('DOM.getDocument');
+                  const selected=await cdp.send('DOM.querySelector',{nodeId:root.root.nodeId,selector:job.selector});
+                  await cdp.send('DOM.focus',{nodeId:selected.nodeId});
+                }
+                await sleep(request.settleMs);
+              }
+              await guard.check(identity);
+              const observation=await cdp.evaluate('('+probe+')('+JSON.stringify({maxElements:request.maxElements,targetSelector:job.state!=='default'?job.selector:undefined})+')');
+              observation.capturedAt=new Date().toISOString();
+              const state=point===0?(job.snapshotState||job.state):'scroll-'+String(point).padStart(2,'0');
+              if(job.state!=='default') {
+                const applied=await cdp.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(job.selector)});return !!el&&${job.state==='hover'?"el.matches(':hover')":"document.activeElement===el&&el.matches(':focus')"};})()`);
+                if(!applied)throw new Error('Requested interaction state did not apply');
+                const target=observation.interactionTarget;
+                if(!target || !observation.elements.some(e=>e.id===target.id&&e.selector===target.selector))throw new Error('Interaction target not measured');
+                observation.interaction={kind:job.state,selector:job.selector,elementId:target.id,elementSelector:target.selector,applied};
+              }
+              delete observation.interactionTarget;
+              observation.readiness={documentState:ready.state,fonts:ready.fonts,
+                unloadedImages:await cdp.evaluate('[...document.images].filter(i=>!i.complete||!i.naturalWidth).length')};
+              if(ready.state!=='complete' || ready.fonts!=='loaded') observation.gaps.push('readiness timeout');
+              observation.scrollWalk=await walk.summary();
+              observation.gaps.push(...observation.scrollWalk.gaps);
+              observation.walkComplete=point===positions.length-1?observation.scrollWalk.complete:undefined;
+              observation.health={errors:health.errors.slice(0,100),failures:health.failures.slice(0,100),navigations};
+              observation.browser={product:version.product,protocolVersion:version.protocolVersion,metricsMode:'css-viewport'};
+              observation.mainDocument=identity.mainDocument;
+              observation.documentIdentity={frameId:identity.frameId,loaderId:identity.loaderId};
+              observation.captureConfig=job.captureConfig;observation.captureAttempt=job.attemptId;
+              observation.checkpoint={index:point,fraction:positions[point]};
+              observation.capabilities={backend:'local-cdp',matchedStyles:true,renderedFonts:true};
+              await sourceEvidence(cdp,observation,sheets,out,request.maxMatched);
+              await guard.check(identity);
+              const id=hash(job.url+'|'+job.viewport+'|'+state).slice(0,16);
+              const file=id+'.json.gz', screenshot=id+'.jpg';
+              const image=await cdp.send('Page.captureScreenshot',{format:'jpeg',quality:92},30000);
+              await guard.check(identity);
+              await writeFile(path.join(out,screenshot),Buffer.from(image.data,'base64'));
+              await writeFile(path.join(out,file),gzipSync(JSON.stringify(observation)));
+              result.snapshots.push({file,screenshot,url:job.url,viewport:job.viewport,state});await saveResult();
+              console.log(JSON.stringify({status:'staged',url:job.url,viewport:job.viewport,state,elements:observation.elements.length}));
+              break;
+            } catch(error) {
+              if(retry<2 && identity && (error instanceof DocumentChanged || await guard.changed(identity))) {
+                await sleep(request.settleMs);continue;
+              }
+              throw error;
             }
           }
-          if(job.state!=='default') {
-            const rect=await cdp.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(job.selector)});if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-            if(!rect) throw new Error('State selector not found');
-            if(job.state==='hover') await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',...rect});
-            else {
-              const root=await cdp.send('DOM.getDocument');
-              const selected=await cdp.send('DOM.querySelector',{nodeId:root.root.nodeId,selector:job.selector});
-              await cdp.send('DOM.focus',{nodeId:selected.nodeId});
-            }
-            await sleep(request.settleMs);
-          }
-          const observation=await cdp.evaluate('('+probe+')('+JSON.stringify({maxElements:request.maxElements})+')');
-          observation.capturedAt=new Date().toISOString();
-          const state=point===0?(job.snapshotState||job.state):'scroll-'+String(point).padStart(2,'0');
-          if(job.state!=='default') {
-            const applied=await cdp.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(job.selector)});return !!el&&${job.state==='hover'?"el.matches(':hover')":"document.activeElement===el"};})()`);
-            if(!applied)throw new Error('Requested interaction state did not apply');
-            observation.interaction={kind:job.state,selector:job.selector,applied};
-          }
-          observation.readiness={documentState:ready.state,fonts:ready.fonts,
-            unloadedImages:await cdp.evaluate('[...document.images].filter(i=>!i.complete||!i.naturalWidth).length')};
-          if(ready.state!=='complete' || ready.fonts!=='loaded') observation.gaps.push('readiness timeout');
-          const geometry=await cdp.evaluate('({y:scrollY,h:innerHeight,total:document.documentElement.scrollHeight})');
-          walkComplete=geometry.y+geometry.h>=geometry.total-2;
-          observation.walkComplete=positions.length===1 ? geometry.total<=geometry.h : point===positions.length-1 ? walkComplete : undefined;
-          observation.health={errors:health.errors.slice(0,100),failures:health.failures.slice(0,100),navigations};
-          observation.browser={product:version.product,protocolVersion:version.protocolVersion,metricsMode:'css-viewport'};
-          observation.mainDocument=mainDocument;
-          observation.captureConfig=job.captureConfig;observation.captureAttempt=job.attemptId;
-          observation.checkpoint={index:point,fraction:positions[point]};
-          observation.capabilities={backend:'local-cdp',matchedStyles:true,renderedFonts:true};
-          await sourceEvidence(cdp,observation,sheets,out,request.maxMatched);
-          const id=hash(job.url+'|'+job.viewport+'|'+state).slice(0,16);
-          const file=id+'.json.gz', screenshot=id+'.jpg';
-          const image=await cdp.send('Page.captureScreenshot',{format:'jpeg',quality:92},30000);
-          await writeFile(path.join(out,screenshot),Buffer.from(image.data,'base64'));
-          await writeFile(path.join(out,file),gzipSync(JSON.stringify(observation)));
-          result.snapshots.push({file,screenshot,url:job.url,viewport:job.viewport,state});await saveResult();
-          console.log(JSON.stringify({status:'staged',url:job.url,viewport:job.viewport,state,elements:observation.elements.length}));
         }
       } catch(error) {
         result.failures.push({url:job.url,viewport:job.viewport,state:failedState,stage:'capture',message:error.message});
@@ -160,7 +167,11 @@ async function sourceEvidence(cdp,obs,sheets,out,limit) {
     } catch { obs.gaps.push('stylesheet text unavailable'); }
   }
   const root=await cdp.send('DOM.getDocument',{depth:0});
-  const chosen=obs.elements.filter(el=>el.hasText||['button','nav','input','svg'].includes(el.tag)||Object.keys(el.pseudos).length).slice(0,limit);
+  const target=obs.interaction?.elementId;
+  const eligible=obs.elements.filter(el=>el.id===target||el.textStyleRelevant||el.hasText||['button','nav','input','svg'].includes(el.tag)||Object.keys(el.pseudos).length);
+  eligible.sort((a,b)=>a.id===target?-1:b.id===target?1:0);
+  const chosen=eligible.slice(0,limit);
+  if(target && !limit)obs.gaps.push('interaction target matched-style/font sampling disabled (maxMatched=0)');
   if(chosen.length<obs.elements.length)obs.gaps.push('matched-style/font sampling limited to '+chosen.length+' representative elements');
   const readRule=(entry,pseudo=null,inherited=false,ancestorSelector=null,ancestorDepth=null)=>{
     const rule=entry.rule, header=sheets.get(rule.style.styleSheetId);
@@ -175,7 +186,7 @@ async function sourceEvidence(cdp,obs,sheets,out,limit) {
   for(const el of chosen) {
     try {
       const {nodeId}=await cdp.send('DOM.querySelector',{nodeId:root.root.nodeId,selector:el.selector});
-      if(!nodeId)continue;
+      if(!nodeId){if(el.id===target)throw new Error('Interaction target source node missing');continue;}
       const match=await cdp.send('CSS.getMatchedStylesForNode',{nodeId});
       el.matchedRules=(match.matchedCSSRules||[]).map(r=>readRule(r));
       for(const [depth,inherited] of (match.inherited||[]).entries()) {
@@ -186,8 +197,14 @@ async function sourceEvidence(cdp,obs,sheets,out,limit) {
           active:true,origin:'inline',inherited:true,ancestorSelector,ancestorDepth:depth+1,pseudo:null,provenance:'matched-candidate'});
       }
       for(const pseudo of match.pseudoElements||[])el.matchedRules.push(...(pseudo.matches||[]).map(r=>readRule(r,'::'+pseudo.pseudoType)));
-      if(el.hasText)el.renderedFonts=(await cdp.send('CSS.getPlatformFontsForNode',{nodeId})).fonts;
-    } catch { obs.gaps.push('matched-style/font unavailable for '+el.selector); }
+      if(el.textStyleRelevant||el.hasText||el.id===target) {
+        el.renderedFonts=(await cdp.send('CSS.getPlatformFontsForNode',{nodeId})).fonts;
+        if(el.textStyleRelevant && !el.renderedFonts.some(f=>f.glyphCount>0))obs.gaps.push('rendered fonts unknown for '+el.selector);
+      }
+    } catch(error) {
+      if(el.id===target)throw new Error('Interaction target matched-style/font unavailable: '+error.message);
+      obs.gaps.push('matched-style/font unavailable for '+el.selector);
+    }
   }
   const table=[],positions=new Map();
   for(const el of obs.elements) {

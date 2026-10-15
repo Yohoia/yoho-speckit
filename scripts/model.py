@@ -2,7 +2,8 @@
 import re
 from collections import defaultdict
 from pathlib import Path
-from common import coverage, digest, index_for, local_file, read_json, write_json, now, STATUS
+from common import coverage, digest, index_for, local_file, read_json, write_json, now, STATUS, evidence_lock
+from css_safety import safe_css
 
 TYPE_PROPS = ('fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
               'fontFeatureSettings', 'fontVariationSettings', 'textTransform')
@@ -13,14 +14,6 @@ NARRATIVE_SECTIONS = (('imagery','Imagery'),('layout','Layout'),
     ('agentPromptGuide','Agent Prompt Guide'),('signatureRules','Signature Rules'),
     ('similarBrands','Similar Brands'))
 LENGTH = re.compile(r'-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:px|rem|em|%|vh|vw|dvh|dvw|svh|svw|lvh|lvw|ch|ex|vmin|vmax|cqw|cqh|pt|pc|cm|mm|in)$')
-
-
-def safe_css(value):
-    if not isinstance(value, str) or not value.strip() or len(value) > 3000:
-        raise ValueError('CSS 值为空、过长或类型错误')
-    if re.search(r'[;{}<>@\n\r]|/\*|\*/|url\s*\(|expression\s*\(', value, re.I):
-        raise ValueError('Token 必须为单个无外部资源的 CSS 值')
-    return value
 
 
 def nonzero(value):
@@ -45,6 +38,11 @@ def validate_value(category, value):
 
 
 def build(run):
+    with evidence_lock(run):
+        return _build(run)
+
+
+def _build(run):
     run = Path(run)
     cov = coverage(run)
     index = {'snapshots':cov['snapshots']}
@@ -79,7 +77,8 @@ def build(run):
         observations.append(obs)
         for el in obs['elements']:
             s = el['styles']
-            if el.get('hasText') and s.get('color'): add('color', s['color'], row, el, 'color')
+            text_style=el.get('textStyleRelevant',el.get('hasText') or el['tag'] in {'input','textarea','select'})
+            if text_style and s.get('color'): add('color', s['color'], row, el, 'color')
             if nonzero(s.get('backgroundColor')):
                 add('color', s['backgroundColor'], row, el, 'backgroundColor')
                 add('surface', s['backgroundColor'], row, el, 'backgroundColor')
@@ -90,10 +89,11 @@ def build(run):
                 for prop in ('fill','stroke'):
                     if nonzero(s.get(prop)) and 'url(' not in s[prop]:add('color',s[prop],row,el,prop)
             if 'gradient(' in s.get('backgroundImage', ''): add('gradient', s['backgroundImage'], row, el, 'backgroundImage')
-            if el.get('hasText') and all(s.get(p) for p in TYPE_PROPS):
+            if text_style and all(s.get(p) for p in TYPE_PROPS):
                 add('font', s['fontFamily'], row, el, 'fontFamily')
                 add('typography', {p:s[p] for p in TYPE_PROPS}, row, el, 'typography')
-            for p in ('paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'gap', 'rowGap', 'columnGap'):
+            for p in ('paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+                      'marginTop', 'marginRight', 'marginBottom', 'marginLeft', 'gap', 'rowGap', 'columnGap'):
                 if nonzero(s.get(p)): add('spacing', s[p], row, el, p)
             for p in ('borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomRightRadius', 'borderBottomLeftRadius'):
                 if nonzero(s.get(p)): add('radius', s[p], row, el, p)
@@ -223,6 +223,8 @@ def validate_model(model, run):
         validate_value(token['category'],value)
         cited = token.get('evidenceIds', [])
         if any(x not in refs for x in cited): raise ValueError('Token 证据引用无效')
+        if token['status']=='inferred' and not cited:
+            raise ValueError('推断 Token 需附原始证据；无依据补充使用 proposed')
         if token['status'] == 'observed' and (not cited or any(refs[x]['value'] != value for x in cited)):
             raise ValueError('实测 Token 没有等值原始证据')
     narrative = [model['overview']] + model.get('components', [])

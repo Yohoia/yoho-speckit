@@ -13,6 +13,23 @@ def request_for(index,row):
     return index.get('requests',{}).get(snapshot_key(row['requestedUrl'],row['viewport'],base))
 
 
+def main_document_failed(obs):
+    document=obs.get('mainDocument',{});status=document.get('status')
+    if isinstance(status,(int,float)):
+        if status>=400:return True
+        # Older collectors could attach the initial loader to a later error page.
+        # Do not apply this heuristic to new snapshots whose live identity was checked.
+        if not obs.get('documentIdentity') and document.get('frameId'):
+            return any(f.get('type')=='Document' and f.get('frameId')==document['frameId'] and
+                f.get('loaderId')!=document.get('loaderId') and f.get('url')==obs['url'] and f.get('status',0)>=400
+                for f in obs.get('health',{}).get('failures',[]))
+        return False
+    # Legacy observations lack frame/loader identity. Typed subresources are never
+    # promoted to documents merely because their URL equals the page URL.
+    return any(f.get('url')==obs['url'] and f.get('status',0)>=400 and
+        f.get('type') in {None,'Document'} for f in obs.get('health',{}).get('failures',[]))
+
+
 def coverage(run):
     plan,index=plan_for(run),index_for(run);gaps=list(plan.get('gaps',[]));active=[];stale=[];excluded=[];candidates={}
     allowed=[origin(plan['originalUrl'])]+[origin(x) for x in plan.get('authorizedOrigins',[])]
@@ -28,7 +45,9 @@ def coverage(run):
         request=request_for(index,row)
         if any(abs(obs['viewport'][k]-view[k])>1 for k in ('width','height')):reason='snapshot viewport differs from current plan'
         elif origin(obs['url']) not in allowed:reason='final origin no longer authorized'
-        elif obs.get('mainDocument',{}).get('status',200)>=400 or any(x.get('url')==obs['url'] and x.get('status',0)>=400 for x in obs.get('health',{}).get('failures',[])):
+        elif obs.get('documentIdentity') and any(obs['documentIdentity'].get(k)!=obs.get('mainDocument',{}).get(k) for k in ('frameId','loaderId')):
+            reason='observation and main document identity differ'
+        elif main_document_failed(obs):
             reason='main document HTTP error'
         elif request and (row['state'] not in request['states'] or row.get('configSha256')!=digest(request['config'])):
             reason='collection configuration/checkpoint no longer current'

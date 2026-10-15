@@ -38,9 +38,13 @@ def summary_styles(styles):
         if all(values):
             if len(set(values))==1:values=values[:1]
             parts.append(labels+' '+' '.join(values))
-    if styles.get('borderTopWidth') not in {None,'0','0px'}:
-        parts.append('Top border '+' '.join(styles.get(p,'未确认') for p in ('borderTopWidth','borderTopStyle'))
-            +' '+normalize_css(styles.get('borderTopColor','未确认')))
+    borders=[]
+    for side in ('Top','Right','Bottom','Left'):
+        if styles.get('border'+side+'Width') not in {None,'0','0px'}:
+            borders.append((side,' '.join(styles.get('border'+side+p,'未确认') for p in ('Width','Style'))
+                +' '+normalize_css(styles.get('border'+side+'Color','未确认'))))
+    if len(borders)==4 and len({value for side,value in borders})==1:parts.append('Border '+borders[0][1])
+    else:parts.extend(side+' border '+value for side,value in borders)
     if styles.get('boxShadow') not in {None,'none'}:parts.append('Shadow '+normalize_css(styles['boxShadow']))
     return '; '.join(parts)+'.' if parts else '样式组合未确认。'
 

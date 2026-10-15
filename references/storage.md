@@ -1,6 +1,6 @@
 # 证据存储与维护
 
-回到 [主流程](../SKILL.md)。查看大观察、迁移旧运行目录或清理时读取。
+回到 [主流程](../SKILL.md)。首次核对任何观察前读“有界查看”；迁移或清理时再读对应维护章节。
 
 ## 存储合同
 
@@ -13,6 +13,8 @@ index.sha256为完整逻辑观察的摘要；共享记录另有逻辑摘要。�
 refresh将旧坐标放入index.history，不覆盖其内容文件。没有自动删除或静默历史过期。
 
 ## 有界查看
+
+首次核对新旧观察都从此处开始；先用coverage中的snapshot ID查看摘要，再按selector或sourceRuleIndex缩小范围。
 
 ```text
 <python> <skill>/scripts/design.py inspect --run <run-directory> --snapshot <id>
@@ -47,5 +49,8 @@ compact只改变存储，不能把失效页面/视口或错误页变成有效证
 失效/已移出范围的当前行会按历史处理。JSON模型、候选与子目录JSON归档引用会额外保护文件，即使超出N。
 清理只作用于observations、screenshots、stylesheets、records四个托管目录，持有与采集提交相同的账本锁。
 自定义非JSON产物需用evidence/pins.json字符串数组登记要保留的相对证据路径；保留观察即可自动保留其共享依赖。
+引用先按运行目录解析，evidence/...与./evidence/...等价，按文件身份保护；pins中的缺失、越界或非证据文件会在删除前报错。
 未知压缩归档或符号链接归档会阻止清理，避免猜测它是否仍引用证据。
+符号链接检查包含文件、目录和断链；不跟随链接读取外部归档。阻断时index及证据保持原样。
+build、export、verify与采集提交、compact、clean使用同一证据锁，避免维护过程抢先删除尚未保存模型引用的证据；锁忙时稍后重试。手工编辑文件应与维护操作串行。
 先核对dry-run，按用户已有删除授权使用apply；没有授权时只报告建议。历史解释仍需保留时不要仅按当前index删除文件。

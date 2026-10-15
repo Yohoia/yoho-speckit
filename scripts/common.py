@@ -211,7 +211,7 @@ def _ingest(run, obs, backend, viewport_name, state="default", requested_url=Non
     if obs.get('captureAttempt'):row['attemptId']=obs['captureAttempt']
     if exists and exists!=row:index.setdefault('history',[]).append(exists)
     for old in index["failures"]:
-        if old.get("url") == requested and old.get("viewport") == viewport_name and old.get('state')==state and old.get("stage") != "cleanup":
+        if not old.get('tasks') and old.get("url") == requested and old.get("viewport") == viewport_name and old.get('state')==state and old.get("stage") != "cleanup":
             old["resolvedAt"] = now()
     index["snapshots"] = [x for x in index["snapshots"] if x["id"] != key] + [row]
     write_json(run / "evidence" / "index.json", index)

@@ -6,8 +6,8 @@
     'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'marginTop',
     'marginRight', 'marginBottom', 'marginLeft', 'gap', 'rowGap', 'columnGap',
     'borderTopWidth', 'borderTopStyle', 'borderTopColor', 'borderRightWidth',
-    'borderRightColor', 'borderBottomWidth', 'borderBottomColor', 'borderLeftWidth',
-    'borderLeftColor', 'borderTopLeftRadius', 'borderTopRightRadius',
+    'borderRightStyle', 'borderRightColor', 'borderBottomWidth', 'borderBottomStyle', 'borderBottomColor', 'borderLeftWidth',
+    'borderLeftStyle', 'borderLeftColor', 'borderTopLeftRadius', 'borderTopRightRadius',
     'borderBottomRightRadius', 'borderBottomLeftRadius', 'boxShadow', 'display',
     'position', 'width', 'height', 'minWidth', 'maxWidth', 'gridTemplateColumns',
     'gridTemplateRows', 'alignItems', 'justifyContent', 'transitionProperty',
@@ -53,12 +53,17 @@
   });
   const priority = el => el === document.documentElement || el === document.body ? 0 :
     el.matches('h1,h2,h3,nav,button,input,textarea,select,a,[role=button]') ? 1 : el.matches('svg,path,circle,rect,polygon') ? 3 : 2;
-  candidates.sort((a,b) => priority(a)-priority(b));
+  const required=options.targetSelector?document.querySelector(options.targetSelector):null;
+  if(options.targetSelector && (!required || !candidates.includes(required)))throw new Error('Interaction target has no measurable layout');
+  candidates.sort((a,b) => a===required?-1:b===required?1:priority(a)-priority(b));
   const elements = candidates.slice(0, maxElements).map((el, index) => {
     const rect = el.getBoundingClientRect(), tag = el.tagName.toLowerCase();
     // Leaf text avoids duplicate container copy; form values are never collected.
     const text = ['input', 'textarea', 'select', 'option'].includes(tag) ? '' :
       [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim().slice(0, 120);
+    const controlType=tag==='input'?el.type:undefined;
+    const textStyleRelevant=!!text || ['textarea','select'].includes(tag) ||
+      (tag==='input' && !['hidden','checkbox','radio','range','color','file','image'].includes(controlType));
     const pseudos = {};
     for (const name of ['::before', '::after']) {
       const style = css(el, name);
@@ -75,7 +80,7 @@
     return { id: 'e' + (index + 1), selector: selector(el), tag, ancestorSelectors:ancestors,
       componentHint:buttonLike?'button':undefined,
       role: el.getAttribute('role') || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : ''),
-      text, styles: css(el), pseudos,
+      text, textStyleRelevant, controlType, styles: css(el), pseudos,
       styleDeclarations: Object.keys(styleDeclarations).length ? styleDeclarations : undefined,
       rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
       inViewport: rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
@@ -129,7 +134,8 @@
     fontStatus: document.fonts?.status || 'unknown',
     declaredFonts, gaps, shadowRoots,
     sampling: {total: candidates.length, captured: elements.length, truncated: candidates.length > maxElements, declarationsTruncated},
-    elements, links, sourceVariables, rootVariables, sourceRules, inaccessibleStylesheets,
+    elements, interactionTarget:required?{id:elements[0].id,selector:elements[0].selector}:undefined,
+    links, sourceVariables, rootVariables, sourceRules, inaccessibleStylesheets,
     canvasCount: document.querySelectorAll('canvas').length
   };
 }

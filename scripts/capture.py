@@ -72,7 +72,7 @@ def capture(run, target=None, viewport=None, state='default', selector=None, ref
     failures=current['failures'];jobs=[];changed=set();requests=[]
     for page in pages:
         for view in views:
-            config={'collectorVersion':2,'width':view['width'],'height':view['height'],'maxElements':max_elements,
+            config={'collectorVersion':5,'width':view['width'],'height':view['height'],'maxElements':max_elements,
                 'maxMatched':max_matched,'checkpoints':checkpoints if state=='default' else 1,'maxSteps':24,
                 'state':snapshot_state,'selector':selector if state!='default' else None}
             sha=digest(config)

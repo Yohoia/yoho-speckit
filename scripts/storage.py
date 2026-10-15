@@ -116,23 +116,39 @@ def clean(run, apply=False, keep_history=None):
             count=counts.get(row['id'],0);counts[row['id']]=count+1
             if keep_history is None or count<keep_history:retained.append(row)
         retained.reverse();protected=set();queued=[]
-        def reference(value):
+        def identity(path):
+            stat=path.stat();return stat.st_dev,stat.st_ino
+        def reference(value,strict=False):
             if isinstance(value,dict):
                 for item in value.values():reference(item)
             elif isinstance(value,list):
-                for item in value:reference(item)
-            elif isinstance(value,str) and value.startswith('evidence/'):
-                path=local_file(run,value)
-                if path.is_file() and value not in protected:
-                    protected.add(value)
+                for item in value:reference(item,strict)
+            elif isinstance(value,str):
+                # Resolve aliases before deciding whether this is managed evidence.
+                # File identity also handles case aliases and hard links safely.
+                if not strict and ('evidence' not in value.lower() or '://' in value):return
+                try:path=local_file(run,value)
+                except ValueError:
+                    if strict:raise
+                    return  # An external path in arbitrary metadata is not a managed file.
+                if not path.relative_to(run).parts or path.relative_to(run).parts[0].lower()!='evidence' or not path.is_file():
+                    if strict:raise ValueError('pins 必须指向运行目录内现存的证据文件：'+value)
+                    return
+                key=identity(path)
+                if key not in protected:
+                    protected.add(key)
                     if path.name.endswith(('.json','.json.gz')):queued.append(path)
         reference(active);reference(retained)
         pins=run/'evidence'/'pins.json'
-        if pins.exists():reference(read_json(pins))
+        if pins.exists():
+            pinned=read_json(pins)
+            if not isinstance(pinned,list) or any(not isinstance(p,str) for p in pinned):raise ValueError('pins 必须为证据路径字符串数组')
+            reference(pinned,strict=True)
         # Inspect every persisted JSON artifact outside evidence, including archive subdirectories.
         for path in run.rglob('*'):
-            if not path.is_file() or 'evidence' in path.relative_to(run).parts:continue
+            if path.relative_to(run).parts[0]=='evidence':continue
             if path.is_symlink():raise ValueError('存在未解析符号链接归档：'+str(path.relative_to(run)))
+            if not path.is_file():continue
             if path.name.endswith(('.zip','.tar','.tgz','.tar.gz')):
                 raise ValueError('存在未解析归档，无法证明清理安全：'+str(path.relative_to(run)))
             if path.name.endswith(('.json','.json.gz')):reference(read_json(path))
@@ -144,7 +160,7 @@ def clean(run, apply=False, keep_history=None):
         for name in ('observations','screenshots','stylesheets','records'):
             for path in sorted((run/'evidence'/name).glob('*')):
                 relative=path.relative_to(run).as_posix()
-                if path.is_file() and not path.is_symlink() and relative not in protected:
+                if path.is_file() and not path.is_symlink() and identity(path) not in protected:
                     candidates.append({'file':relative,'bytes':path.stat().st_size})
         if apply:
             index['snapshots']=active;index['history']=retained;write_json(run/'evidence'/'index.json',index)

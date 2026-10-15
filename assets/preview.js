@@ -2,7 +2,15 @@
 const payload=JSON.parse(document.getElementById('payload').textContent), model=payload.model;
 const byId=id=>document.getElementById(id), make=(tag,text,cls)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
 const value=t=>typeof t.value==='object'?JSON.stringify(t.value):(t.exportValue??t.value);const shownValue=t=>t.displayValue||value(t);
-const safeValue=v=>typeof v==='string'&&!/[;{}<>@\n\r]|url\s*\(|expression\s*\(/i.test(v);
+const resourceFunctions=new Set(payload.cssPolicy.resourceFunctions);
+function safeValue(v){
+  if(typeof v!=='string'||!v.trim()||v.length>3000||/[;{}<>@\n\r]|\/\*|\*\//.test(v))return false;
+  const text=v.replace(/"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'/g,'""').replace(/\\([0-9a-fA-F]{1,6})(?:\r\n|[\t\n\f\r ])?|\\([^\r\n\f])/g,(_,hex,char)=>{
+    if(char!==undefined)return char;
+    const code=parseInt(hex,16);return code>0&&code<=0x10ffff&&!(code>=0xd800&&code<=0xdfff)?String.fromCodePoint(code):'\ufffd';
+  });
+  return ![...text.matchAll(/([\w-]+)\s*\(/g)].some(m=>resourceFunctions.has(m[1].toLowerCase()));
+}
 for(const [key,v]of Object.entries(payload.css)){if(key.startsWith('--')&&safeValue(v))document.documentElement.style.setProperty(key,v);}
 let current='DESIGN.md',variant='extended',mobileView='preview';
 function selectedFile(){return variant==='compact'?payload.compactFiles[current]:current;}
@@ -10,7 +18,7 @@ function shiki(parent,text,theme){
   const el=make('span',text);for(const [key,value]of Object.entries(theme)){el.style.setProperty(key,value);}
   parent.append(el);return el;
 }
-const plainTheme={light:'#24292E',dark:'#E1E4E8'};
+const plainTheme=theme('#24292E','#E1E4E8');
 function theme(light,dark,extra={}){return {'--shiki-light':light,'--shiki-dark':dark,...extra};}
 function appendInlineMarkdown(parent,text){
   const pattern=/(`[^`]+`)|(\*\*[^*]+\*\*)/g;let last=0,match;
@@ -165,7 +173,7 @@ function renderMetrics(){
     tr.append(valueCell,preview);byId('spacing').append(tr);
   }
   showMore(byId('radius'),tokens('radius'),10,t=>metricRow(t,'radius'),'steps');
-  const shadows=byId('shadow');shadows.replaceChildren();tokens('shadow').forEach(t=>{const card=make('div',t.label,'elevation-card');card.style.boxShadow='var('+t.cssVariable+')';card.title=value(t);card.onclick=()=>copy(value(t));shadows.append(card)});if(!shadows.children.length)shadows.append(make('div','未在已采范围确认。','empty'));
+  const shadows=byId('shadow');shadows.replaceChildren();tokens('shadow').forEach(t=>{const card=make('button',t.label,'elevation-card');card.type='button';card.setAttribute('aria-label','Copy shadow '+t.label);card.style.boxShadow='var('+t.cssVariable+')';card.title=value(t);card.onclick=()=>copy(value(t));shadows.append(card)});if(!shadows.children.length)shadows.append(make('div','未在已采范围确认。','empty'));
 }
 function renderGuidelines(){
   for(const [key,icon]of [['do','do'],['dont','dont']]){const list=byId(key);list.replaceChildren();for(const item of model.guidelines[key]){const li=make('li');const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('class','guideline-icon '+icon);svg.setAttribute('aria-hidden','true');const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',icon==='do'?'M20 6 9 17l-5-5':'M18 6 6 18M6 6l12 12');path.setAttribute('fill','none');path.setAttribute('stroke','currentColor');path.setAttribute('stroke-width','2');path.setAttribute('stroke-linecap','round');svg.append(path);li.append(svg,make('span',item.text||item.description));list.append(li)}if(!list.children.length)list.append(make('li','尚未形成有依据的建议。','empty'))}

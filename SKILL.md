@@ -4,7 +4,7 @@ description: 从网站网址提取有来源依据的设计规范，生成 DESIGN
 license: MIT
 compatibility: Python 3.10+、Node.js 22+、本机 Chrome 或 Chromium；无需 npm 包和云端 API Key。采集固定使用隔离的本地 CDP 浏览器。macOS 已实测；Windows/Linux 依赖发现已实现，端到端未验证。
 metadata:
-  version: "0.3.0"
+  version: "0.3.5"
 ---
 
 # SpecKit
@@ -13,7 +13,6 @@ metadata:
 截图证明构图，计算样式证明观测条件下的数值；用途由 Agent 解释。
 原始声明、匹配候选、实测数值与解释分开保存。
 所有导出来自同一份审核过的 design.json。
-大型证据的有界读取、无损压缩与维护见 [证据存储](references/storage.md)。
 
 ## 1. 检查环境与初始化
 
@@ -39,7 +38,7 @@ doctor 为只读本地检查；ready=true 后继续。
 `init --mode single` 只采输入页；extended 需要用户给定 max-pages。
 把审核过的 URL 写入 plan.pages 字符串数组，记录 selectionNotes。
 没有新增设计信息时可提前停止，说明原因和未访问候选。
-计划变动后重新 build 并合并解释，避免沿用旧覆盖信息。
+采集范围改变后，按 [更新合并](references/model.md#更新合并) 处理新候选。
 
 ```text
 <python> <skill>/scripts/design.py check-plan --run <run-directory>
@@ -54,6 +53,7 @@ doctor 为只读本地检查；ready=true 后继续。
 
 ## 3. 补充状态与核对证据
 
+首次核对任何观察前，先读 [有界查看](references/storage.md#有界查看)，用 inspect 摘要和坐标逐项查看。
 需要 hover/focus 时选择实际代表元素，用同一入口采集。
 详细预算和命令参数见 [本地浏览器](references/browser.md)。
 
@@ -72,22 +72,21 @@ refresh 在验证新结果后更新账本。
 
 ## 4. 整理设计规范
 
-阅读 [数据与解释](references/model.md)，生成初始候选。
+阅读 [数据与解释](references/model.md)，按其中的证据状态和审核要求整理 build 返回的文件。
 
 ```text
 <python> <skill>/scripts/design.py build --run <run-directory>
 ```
 
 程序归并数值与排版组合，Agent 回看证据解释名称、用途和摘要。
-observed 是与原始证据等值的实测；inferred 是附依据的解释。
-proposed 是补充规则；无法验证的字段为 unknown。
+状态与依据统一按 [证据与状态](references/model.md#证据与状态) 标注。
 整理代表组件、布局用途、表面层级与 Do/Don't，附 evidenceIds。
 同值不同用途可保留不同角色；视口和状态差异保持证据上下文。
 单个间距不证明基础网格，声明字体不证明真实字体已加载。
 未支持的颜色编码保留原值与缺口，不宣称转换成功。
 只整理交付需要的章节，不补已排除章节的占位内容。
-解释完成后将 review.status 设为 reviewed。
-再次 build 只写 design.candidate.json；审核新证据后合并至 design.json。
+首次建模编辑 design.json；再次 build 后按 [更新合并](references/model.md#更新合并) 编辑 design.candidate.json。
+逐项满足 [审核完成条件](references/model.md#审核完成条件) 后再设 reviewed；更新候选此时才写回 design.json。
 
 ## 5. 导出与验证
 
@@ -103,6 +102,7 @@ proposed 是补充规则；无法验证的字段为 unknown。
 在预览中核对桌面/移动、格式切换、复制和下载。
 核对代表数值与来源文件；程序一致性通过不等于提取准确率。
 文件内容有变化时回到模型修改，再统一导出。
+本步完成条件：verify.status=passed，预览核对结果及未完成项已有记录。
 
 ## 完成与恢复
 
@@ -111,3 +111,4 @@ proposed 是补充规则；无法验证的字段为 unknown。
 结果是已采范围的设计参考，不宣称恢复私有官方设计系统。
 默认本地交付，不自动发布、安装其他 Skill 或改浏览器个人配置。
 失败时报告保存位置、停止阶段和恢复命令，不自动换采集后端。
+迁移或清理运行目录时，再读 [证据存储与维护](references/storage.md)。

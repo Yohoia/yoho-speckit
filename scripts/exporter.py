@@ -4,10 +4,11 @@ import json
 import re
 from pathlib import Path
 from model import TYPE_PROPS, safe_css, validate_model
-from common import digest, local_file, read_json, write_json
+from common import digest, local_file, read_json, write_json, evidence_lock
 from colors import to_hex, normalize_css, conversion_info
 from reference import metric_css, presentation
 from documents import document
+from css_safety import RESOURCE_FUNCTIONS
 
 COMPACT_FILES = {'DESIGN.md':'DESIGN.compact.md','tokens.css':'tokens.compact.css',
     'tailwind.css':'tailwind.compact.css','design-tokens.json':'design-tokens.compact.json'}
@@ -27,16 +28,20 @@ SUFFIX = dict(fontFamily='font-family', fontSize='font-size', fontWeight='font-w
 PROPERTY_ALIASES = {
     'color': ('color',), 'backgroundColor': ('background-color', 'background'),
     'backgroundImage': ('background-image', 'background'),
-    'borderTopColor': ('border-top-color', 'border-top'), 'borderRightColor': ('border-right-color', 'border-right'),
-    'borderBottomColor': ('border-bottom-color', 'border-bottom'), 'borderLeftColor': ('border-left-color', 'border-left'),
-    'borderTopLeftRadius': ('border-top-left-radius',), 'borderTopRightRadius': ('border-top-right-radius',),
-    'borderBottomRightRadius': ('border-bottom-right-radius',), 'borderBottomLeftRadius': ('border-bottom-left-radius',),
+    'borderTopColor': ('border-top-color', 'border-top', 'border-color', 'border'), 'borderRightColor': ('border-right-color', 'border-right', 'border-color', 'border'),
+    'borderBottomColor': ('border-bottom-color', 'border-bottom', 'border-color', 'border'), 'borderLeftColor': ('border-left-color', 'border-left', 'border-color', 'border'),
+    'borderTopLeftRadius': ('border-top-left-radius','border-radius'), 'borderTopRightRadius': ('border-top-right-radius','border-radius'),
+    'borderBottomRightRadius': ('border-bottom-right-radius','border-radius'), 'borderBottomLeftRadius': ('border-bottom-left-radius','border-radius'),
     'boxShadow': ('box-shadow',), 'fontFamily': ('font-family', 'font'),
     'fontSize': ('font-size', 'font'), 'fontWeight': ('font-weight', 'font'),
-    'lineHeight': ('line-height',), 'letterSpacing': ('letter-spacing',),
+    'lineHeight': ('line-height','font'), 'letterSpacing': ('letter-spacing',),
     'fontFeatureSettings': ('font-feature-settings',), 'fontVariationSettings': ('font-variation-settings',),
     'textTransform': ('text-transform',)
 }
+for _side in ('Top','Right','Bottom','Left'):
+    for _box in ('padding','margin'):
+        PROPERTY_ALIASES[_box+_side]=(_box+'-'+_side.lower(),_box)
+PROPERTY_ALIASES.update(rowGap=('row-gap','gap'),columnGap=('column-gap','gap'))
 INHERITED_PROPERTIES={'color','font-family','font-size','font-weight','font','line-height','letter-spacing',
     'font-feature-settings','font-variation-settings','text-transform','fill','stroke'}
 
@@ -64,8 +69,15 @@ def css_values_equal(a, b, category):
 
 
 def _source_candidates(evidence, element, token, observation):
-    properties = PROPERTY_ALIASES.get(evidence.get('property'), (evidence.get('property'),))
-    expected = token.get('value')
+    if evidence.get('property')=='typography' and isinstance(evidence.get('value'),dict):
+        result=[]
+        for prop in TYPE_PROPS:
+            for source in _source_candidates({**evidence,'property':prop,'value':evidence['value'][prop]},element,token,observation):
+                result.append({**source,'computedProperty':prop})
+        return result
+    prop=evidence.get('property','')
+    properties = PROPERTY_ALIASES.get(prop, (re.sub(r'[A-Z]',lambda m:'-'+m[0].lower(),prop),))
+    expected = evidence['value']
     matches = []
     if element and element.get('styleDeclarations'):
         for source_property, declared in element['styleDeclarations'].items():
@@ -77,12 +89,12 @@ def _source_candidates(evidence, element, token, observation):
         rule=observation['sourceRules'][evidence['sourceRuleIndex']]
         return [{'method':'css-declaration','sourceRuleIndex':evidence['sourceRuleIndex'],
             'selector':rule.get('selector',''),'property':evidence['property'],'value':evidence['value'],
-            'computedValue':expected,'href':rule.get('href',''),'context':rule.get('context',''),
+            'href':rule.get('href',''),'context':rule.get('context',''),
             'matchStatus':'explicit-declaration-evidence'}]
     rules=element.get('matchedRules',[]) if element else []
     if evidence.get('property','').startswith('::'):
         pseudo,prop=evidence['property'].split('.',1)
-        properties=PROPERTY_ALIASES.get(prop,(prop,))
+        properties=PROPERTY_ALIASES.get(prop,(re.sub(r'[A-Z]',lambda m:'-'+m[0].lower(),prop),))
         rules=[rule for rule in rules if rule.get('pseudo')==pseudo]
     else:rules=[rule for rule in rules if not rule.get('pseudo')]
     explicit_inherit=any(not r.get('inherited') and any(r.get('values',{}).get(p)=='inherit' for p in properties) for r in rules)
@@ -134,6 +146,7 @@ def attach_source_declarations(model, run):
         observations[snapshot_id] = read_json(local_file(run, row['file']))
     evidence_by_id = {item.get('id'): item for item in model.get('evidence', [])}
     for token in model.get('tokens', []):
+        token.pop('sourceDeclarations',None);token.pop('renderedFonts',None)
         candidates = []
         rendered=[]
         for evidence_id in token.get('evidenceIds', []):
@@ -148,12 +161,14 @@ def attach_source_declarations(model, run):
                     item={**font,'snapshotId':evidence['snapshotId'],'selector':element['selector']}
                     if item not in rendered:rendered.append(item)
             candidates.extend(_source_candidates(evidence, element, token, observation))
-        unique, seen = [], set()
+        unique, seen, counts = [], set(), {}
         for item in candidates:
             key = json.dumps(item, ensure_ascii=False, sort_keys=True)
             if key in seen: continue
+            field=item.get('computedProperty','')
+            if counts.get(field,0)>=3:continue
+            counts[field]=counts.get(field,0)+1
             seen.add(key); unique.append(item)
-            if len(unique) >= 3: break
         if unique: token['sourceDeclarations'] = unique
         if rendered:token['renderedFonts']=rendered
     return model
@@ -205,6 +220,7 @@ def tailwind(model, compact=False):
 
 def tokens_json(model, compact=False):
     result = {}
+    evidence={e['id']:e for e in model.get('evidence',[])}
     reserved={t['name'] for t in model['tokens'] if t['category']=='color'}
     for t in selected_tokens(model,compact):
         group='color' if t['category']=='gradient' else t['category']
@@ -217,7 +233,7 @@ def tokens_json(model, compact=False):
             '$extensions': {'org.yoho-design-extractor': {'status':t['status'],
                 'nameStatus':t.get('nameStatus','inferred'), 'evidenceIds':t['evidenceIds'], 'cssVariable':variable(t),
                 'sourceCategory':t['category'],
-                'computedValue':t['value'], 'displayValue':display_value(t),
+                **value_provenance(t,evidence), 'displayValue':display_value(t),
                 'renderedFonts':t.get('renderedFonts',[]),
                 'normalization':conversion_info(t['value']) if t['category'] in {'color','surface','gradient','shadow'} else {},
                 'sourceDeclarations':t.get('sourceDeclarations', [])}}}
@@ -227,6 +243,17 @@ def tokens_json(model, compact=False):
         'pageCount':model['coverage']['pageCount'],'variant':'compact' if compact else 'extended'}}
     if not compact:result['$extensions']['org.yoho-design-extractor']['layoutMetrics']=model.get('layoutMetrics',{})
     return json.dumps(result, ensure_ascii=False, indent=2) + '\n'
+
+
+def value_provenance(token, evidence):
+    """Keep interpreted values separate from measured values and declaration evidence."""
+    cited=[evidence[ref] for ref in token.get('evidenceIds',[]) if ref in evidence]
+    if token['status']=='observed' and any(e.get('method')!='css-declaration' for e in cited):
+        return {'computedValue':token['value']}
+    return {'modelValue':token['value'],'evidenceValues':[
+        {'evidenceId':e['id'],'snapshotId':e['snapshotId'],'selector':e['selector'],
+         'property':e['property'],'method':e.get('method','dom-computed-style'),'value':e['value']}
+        for e in cited]}
 
 
 def markdown(model, compact=False):
@@ -253,6 +280,7 @@ def generate(model, run):
         'design-tokens.json':tokens_json(export_model),'design-tokens.compact.json':tokens_json(export_model,True)}
     view_model={key:export_model[key] for key in ('siteName','sourceUrl','overview','tokens','guidelines')}
     payload = {'model':view_model,'files':files,'css':css_map,'compactFiles':COMPACT_FILES,
+        'cssPolicy':{'resourceFunctions':sorted(RESOURCE_FUNCTIONS)},
         'reference':presentation(export_model)}
     assets = Path(__file__).resolve().parent.parent/'assets'
     template = (assets/'preview.html').read_text(encoding='utf-8')
@@ -269,6 +297,11 @@ def generate(model, run):
 
 
 def export(run):
+    with evidence_lock(run):
+        return _export(run)
+
+
+def _export(run):
     run = Path(run)
     model = read_json(run/'design.json')
     files = generate(model, run)
@@ -290,6 +323,11 @@ def export(run):
 
 
 def verify(run):
+    with evidence_lock(run):
+        return _verify(run)
+
+
+def _verify(run):
     run = Path(run)
     model = read_json(run/'design.json')
     expected = generate(model,run)

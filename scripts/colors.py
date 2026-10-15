@@ -137,11 +137,27 @@ def normalize_css(value):
 
 def conversion_info(value):
     if not isinstance(value,str):return {}
-    samples=[value] if rgba(value)[0] is not None else [m[0] for m in FUNCTION.finditer(value)]
+    value=value.strip()
+    # A hex operand does not resolve an enclosing color operation. Inspect balanced
+    # functions so relative/nested colors cannot disappear behind a simple regex.
+    wrappers={'linear-gradient','radial-gradient','conic-gradient','repeating-linear-gradient',
+        'repeating-radial-gradient','repeating-conic-gradient'}
+    color_functions={'rgb','rgba','hsl','hsla','hwb','lab','lch','oklab','oklch','color'}
+    operations=[]
+    for match in re.finditer(r'\b([a-z][\w-]*)\(',value,re.I):
+        depth=1;end=match.end()
+        while end<len(value) and depth:
+            depth+=(value[end]=='(')-(value[end]==')');end+=1
+        operations.append((match[1].lower(),value[match.start():end],match.start(),end))
+    samples=[value] if rgba(value)[0] is not None else [text for name,text,_,_ in operations if name in color_functions]
     unsupported=[sample for sample in samples if rgba(sample)[0] is None]
+    for name,text,start,end in operations:
+        if name not in wrappers|color_functions|{'calc','min','max','clamp'} or (
+                start==0 and end==len(value.strip()) and name not in wrappers|color_functions):
+            unsupported.append(text)
     if not samples and not re.search(r'#[0-9a-f]{3,8}\b',normalize_css(value),re.I):unsupported=[value]
     clipped=[sample for sample in samples if rgba(sample)[1]]
     return {'status':'unsupported' if unsupported else 'converted',
             'encoding':None if unsupported else 'sRGB hex (8-bit channels)',
             'gamutClipped':None if unsupported else bool(clipped),
-            'unsupportedSourceColors':unsupported,'clippedSourceColors':clipped}
+            'unsupportedSourceColors':list(dict.fromkeys(unsupported)),'clippedSourceColors':clipped}

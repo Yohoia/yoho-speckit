@@ -26,13 +26,39 @@ class BrowserTests(unittest.TestCase):
         if not doctor()['ready']:raise unittest.SkipTest('Node 22+ and local Chrome/Chromium required')
         fixture=(Path(__file__).parent/'fixtures'/'design.html').read_bytes()
         edges=(Path(__file__).parent/'fixtures'/'edge-cases.html').read_bytes()
+        crowded=('<!doctype html><title>Crowded sampling</title><style>body{font:16px sans-serif}a{display:block}'
+            '#target{background:#112233;padding:12px}#target:hover{background:#10ee20}#target:focus{background:#20b440}</style>'
+            +''.join('<a href="/link'+str(i)+'">Link '+str(i)+'</a>' for i in range(1250))
+            +'<button id="target"><span>Target action</span></button>').encode()
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 if self.path=='/favicon.ico':self.send_response(204);self.end_headers();return
                 if self.path=='/redirect':self.send_response(302);self.send_header('Location','/');self.end_headers();return
                 status={'/missing':404,'/forbidden':403,'/broken':500,'/missing-image':404}.get(self.path,200)
                 body=edges if self.path=='/edges' else fixture+(b'<img src="/missing-image">' if self.path=='/image-failure' else b'')
+                if self.path=='/crowded':body=crowded
+                if self.path=='/same-url-resource':body+=b'<script>fetch(location.href,{method:"POST"})</script>'
+                if self.path=='/hidden-target':body=b'<button id="target" style="display:none">Hidden</button>'
+                if self.path in ('/client-404','/client-ok','/client-cross'):
+                    destination='/missing' if self.path=='/client-404' else '/nav-final'
+                    if self.path=='/client-cross':destination='http://localhost:'+str(self.server.server_port)+'/nav-final'
+                    body=('<!doctype html><title>Entry</title><p>Original page</p><script>setTimeout(()=>location.replace('
+                        +json.dumps(destination)+'),100)</script>').encode()
+                if self.path=='/nav-final':body=b'<!doctype html><title>Final document</title><style>body{font:21px Georgia;color:#297a3a}</style><p>Final page</p>'
+                if self.path=='/history':body=fixture+b'<script>history.replaceState(null,"","/history-view")</script>'
+                if self.path in ('/scroll-nav','/scroll-error'):
+                    destination='/nav-final' if self.path=='/scroll-nav' else '/missing'
+                    body=('<!doctype html><title>Scroll entry</title><p>Entry</p><div style="height:2200px"></div>'
+                        '<script>let moved=false;addEventListener("scroll",()=>{if(scrollY>0&&!moved){moved=true;location.replace('
+                        +json.dumps(destination)+')}})</script>').encode()
+                if self.path=='/controls-borders':body=b'''<!doctype html><title>Controls and borders</title><style>
+body{font:16px Arial;color:black}input,textarea,select{font:700 37px/43px Georgia;color:#a153bc;background:white;padding:12px}
+#check{font-family:CheckboxOnly}button{font:16px Arial;background:white;color:black;padding:12px;border:0;border-right:4px solid #cc3344}
+#dashed{border-right-style:dashed}</style><label for="control">Input</label><input id="control" value="INPUT_NOT_TO_COLLECT" readonly>
+<textarea id="area">TEXTAREA_NOT_TO_COLLECT</textarea><select id="choices"><option value="SELECT_NOT_TO_COLLECT">OPTION_NOT_TO_COLLECT</option></select>
+<input id="check" type="checkbox"><button id="solid">Action</button><button id="dashed">Action</button>'''
                 self.send_response(status);self.send_header('Content-Type','text/html; charset=utf-8');self.end_headers();self.wfile.write(body)
+            def do_POST(self):self.send_response(404);self.end_headers();self.wfile.write(b'API unavailable')
             def log_message(self,*args):pass
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start()
@@ -85,7 +111,125 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(len(export(run)),9);self.assertEqual(verify(run)['status'],'passed')
             fonts=read_json(run/'design-tokens.json')['font']
             self.assertTrue(any(f['$extensions']['org.yoho-design-extractor']['renderedFonts'] for f in fonts.values()))
+            data=read_json(run/'design-tokens.json')
+            self.assertTrue(any(t['$extensions']['org.yoho-design-extractor']['sourceDeclarations'] for t in data['spacing'].values()))
+            self.assertTrue(any(s.get('computedProperty')=='fontSize' for t in data['typography'].values()
+                for s in t['$extensions']['org.yoho-design-extractor']['sourceDeclarations']))
             self.assertTrue(any('gradient(' in t['value'] for t in model['tokens'] if t['category']=='gradient'))
+
+    def test_same_url_failed_post_is_only_a_resource_gap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run=Path(directory)/'same-url';init_run(self.source+'same-url-resource',run,'single',None)
+            p=read_json(run/'plan.json');p['viewports']=p['viewports'][:1];write_json(run/'plan.json',p)
+            result=capture(run,checkpoints=1,max_matched=10)
+            self.assertEqual(result['status'],'captured',result);self.assertEqual(result['snapshots'],1)
+            row=coverage(run)['snapshots'][0];obs=read_json(local_file(run,row['file']))
+            self.assertEqual(obs['mainDocument']['status'],200)
+            self.assertTrue(any(f.get('status')==404 and f.get('type')=='Fetch' and f.get('url')==obs['url'] for f in obs['health']['failures']))
+            self.assertTrue(any('resource failures' in g for g in coverage(run)['gaps']))
+            _,m=build(run);m['review']['status']='reviewed'
+            m['overview']={'description':'Healthy main document with failed API request','status':'inferred','evidenceIds':[m['tokens'][0]['evidenceIds'][0]]}
+            write_json(run/'design.json',m);export(run);self.assertEqual(verify(run)['status'],'passed')
+
+    def test_interaction_targets_survive_full_and_minimal_budgets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run=Path(directory)/'crowded';init_run(self.source+'crowded',run,'single',None)
+            p=read_json(run/'plan.json');p['viewports']=p['viewports'][:1];write_json(run/'plan.json',p)
+            capture(run,checkpoints=1,max_elements=1,max_matched=0)
+            for state,selector,elements,matched,color in [('hover','#target',1200,1,'rgb(16, 238, 32)'),
+                    ('focus','button:last-child',1,1,'rgb(32, 180, 64)'),('hover','#target',1,0,'rgb(16, 238, 32)')]:
+                with self.subTest(state=state,elements=elements,matched=matched):
+                    result=capture(run,viewport='desktop',state=state,selector=selector,checkpoints=1,max_elements=elements,max_matched=matched)
+                    self.assertEqual(result['status'],'captured',result)
+                    row=next(r for r in coverage(run)['snapshots'] if r['state'].startswith(state+'-'))
+                    obs=read_json(local_file(run,row['file']));interaction=obs['interaction']
+                    target=next(e for e in obs['elements'] if e['id']==interaction['elementId'])
+                    self.assertEqual(target['selector'],interaction['elementSelector']);self.assertEqual(target['selector'],'#target')
+                    self.assertEqual(target['styles']['backgroundColor'],color)
+                    self.assertEqual(len(obs['elements']),elements)
+                    if matched:self.assertTrue(target.get('matchedRules'))
+                    else:
+                        self.assertFalse(target.get('matchedRules'))
+                        self.assertTrue(any('interaction target' in g and 'disabled' in g for g in obs['gaps']))
+            self.assertFalse(coverage(run)['missing'])
+            _,m=build(run);m['review']['status']='reviewed'
+            m['overview']={'description':'Measured requested targets under bounded sampling','status':'inferred','evidenceIds':[m['tokens'][0]['evidenceIds'][0]]}
+            self.assertTrue(any(t['value']=='rgb(16, 238, 32)' for t in m['tokens']))
+            write_json(run/'design.json',m);export(run);self.assertEqual(verify(run)['status'],'passed')
+
+    def test_unmeasurable_interaction_target_is_not_a_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run=Path(directory)/'hidden';init_run(self.source+'hidden-target',run,'single',None)
+            p=read_json(run/'plan.json');p['viewports']=p['viewports'][:1];write_json(run/'plan.json',p)
+            result=capture(run,state='hover',selector='#target',max_elements=1,max_matched=1)
+            self.assertEqual(result['status'],'partial');self.assertEqual(result['saved'],0)
+            self.assertEqual(coverage(run)['snapshotCount'],0)
+
+    def test_client_navigation_uses_live_loader_and_allows_history_routes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for path in ('client-404','client-ok','client-cross','history'):
+                with self.subTest(path=path):
+                    run=Path(directory)/path;init_run(self.source+path,run,'single',None)
+                    p=read_json(run/'plan.json');p['viewports']=p['viewports'][:1];write_json(run/'plan.json',p)
+                    result=capture(run,checkpoints=1,max_matched=10)
+                    if path in ('client-404','client-cross'):
+                        self.assertEqual(result['status'],'partial',result);self.assertEqual(coverage(run)['snapshotCount'],0)
+                        self.assertIn('HTTP 404' if path=='client-404' else 'authorized scope',result['failures'][0]['message'])
+                    else:
+                        self.assertEqual(result['status'],'captured',result)
+                        row=coverage(run)['snapshots'][0];obs=read_json(local_file(run,row['file']))
+                        self.assertTrue(obs['url'].endswith('/nav-final' if path=='client-ok' else '/history-view'))
+                        self.assertEqual(obs['mainDocument']['status'],200)
+                        self.assertTrue(all(obs['documentIdentity'][k]==obs['mainDocument'][k] for k in ('frameId','loaderId')))
+                        if path=='client-ok':self.assertEqual(obs['mainDocument']['url'],obs['url'])
+                        else:self.assertNotEqual(obs['mainDocument']['url'],obs['url'])
+                        _,m=build(run);m['review']['status']='reviewed'
+                        m['overview']={'description':'Current loader and history route checked','status':'inferred','evidenceIds':[m['tokens'][0]['evidenceIds'][0]]}
+                        write_json(run/'design.json',m);export(run);self.assertEqual(verify(run)['status'],'passed')
+
+    def test_navigation_during_scroll_recovers_or_rejects_the_new_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for path in ('scroll-nav','scroll-error'):
+                with self.subTest(path=path):
+                    run=Path(directory)/path;init_run(self.source+path,run,'single',None)
+                    p=read_json(run/'plan.json');p['viewports']=p['viewports'][:1];write_json(run/'plan.json',p)
+                    result=capture(run,checkpoints=2,max_matched=10)
+                    rows=coverage(run)['snapshots']
+                    if path=='scroll-error':
+                        self.assertEqual(result['status'],'partial',result);self.assertEqual(len(rows),1)
+                        self.assertIn('HTTP 404',result['failures'][0]['message'])
+                    else:
+                        self.assertEqual(result['status'],'captured',result);self.assertEqual(len(rows),2)
+                        observations=[read_json(local_file(run,r['file'])) for r in rows]
+                        self.assertEqual(len({o['documentIdentity']['loaderId'] for o in observations}),2)
+                        self.assertTrue(observations[-1]['url'].endswith('/nav-final'))
+                    self.assertTrue(all(read_json(local_file(run,r['file']))['mainDocument']['status']==200 for r in rows))
+
+    def test_controls_keep_style_tokens_without_values_and_borders_keep_variants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run=Path(directory)/'controls';init_run(self.source+'controls-borders',run,'single',None)
+            p=read_json(run/'plan.json');p['viewports']=p['viewports'][:1];write_json(run/'plan.json',p)
+            result=capture(run,checkpoints=1,max_matched=80);self.assertEqual(result['status'],'captured',result)
+            obs=read_json(local_file(run,coverage(run)['snapshots'][0]['file']))
+            self.assertNotIn('NOT_TO_COLLECT',json.dumps(obs))
+            for selector in ('#control','#area','#choices'):
+                el=next(e for e in obs['elements'] if e['selector']==selector)
+                self.assertFalse(el['hasText']);self.assertEqual(el['text'],'');self.assertTrue(el['textStyleRelevant'])
+                self.assertEqual(el['styles']['fontFamily'],'Georgia')
+                if not el.get('renderedFonts'):self.assertTrue(any('rendered fonts unknown for '+selector==g for g in obs['gaps']))
+            self.assertFalse(next(e for e in obs['elements'] if e['selector']=='#check')['textStyleRelevant'])
+            _,m=build(run);m['review']['status']='reviewed'
+            m['overview']={'description':'Control style privacy and border variants checked','status':'inferred','evidenceIds':[m['tokens'][0]['evidenceIds'][0]]}
+            self.assertIn('Georgia',[t['value'] for t in m['tokens'] if t['category']=='font'])
+            self.assertNotIn('CheckboxOnly',[t['value'] for t in m['tokens'] if t['category']=='font'])
+            self.assertTrue(any(t['category']=='typography' and t['value']['fontSize']=='37px' for t in m['tokens']))
+            self.assertTrue(any(t['category']=='color' and t['value']=='rgb(161, 83, 188)' for t in m['tokens']))
+            buttons=[c for c in m['components'] if c['kind']=='button'];self.assertEqual(len(buttons),2)
+            self.assertEqual({c['styles']['borderRightStyle'] for c in buttons},{'solid','dashed'})
+            write_json(run/'design.json',m);export(run);self.assertEqual(verify(run)['status'],'passed')
+            self.assertIn('#a153bc',(run/'tokens.css').read_text())
+            text=(run/'DESIGN.md').read_text();self.assertIn('Right border 4px dashed #cc3344',text)
+            self.assertIn('Right border 4px solid #cc3344',text)
 
     @unittest.skipIf(os.name=='nt','POSIX interrupt behavior; Windows awaits platform verification')
     def test_interrupt_cleans_owned_browser_and_keeps_recovery_index(self):

@@ -66,9 +66,9 @@ npx skills add Yohoia/yoho-speckit --skill speckit
 
 - **页数**：single仅输入页；standard通常3个代表页、最多5页；extended使用用户给定上限。没有新增信息可提前停止。
 - **视口**：默认桌面1440×1000、窄屏390×844，按CSS视口测量；不宣称模拟真实手机硬件。
-- **走查**：默认3个滚动检查点，每个视口最多24步；采样、就绪和页尾检查都有预算，未完整观察会记录缺口。
+- **走查**：默认3个滚动检查点，窗口和内部滚动容器共用每个视口最多24步；容器发现和数量也有预算，未完整观察会记录缺口。
 - **元素**：默认最多1200项，代表标题、导航、输入和行动入口优先；真实规则/字体默认采样80个代表元素，预算可调整。
-- **状态**：支持default、滚动检查点，以及指定元素的hover/focus。展开、登录和业务状态不自动执行，未观察状态保持未验证。
+- **状态**：支持default、滚动检查点，以及指定元素的hover/focus。指定目标优先进入采样，并核对实际状态；展开、登录和业务状态不自动执行，未观察状态保持未验证。
 - **来源**：计算样式证明当时的数值；匹配规则是候选，不直接等于层叠获胜声明。字体栈与实际渲染字体分开记录。
 - **覆盖**：Canvas/WebGL、Shadow DOM/iframe及未加载内容可能无法全面测量；不能因此声称恢复了完整官方设计系统。
 - **数据**：证据留在本地，页面正常访问其资源服务器；不将观察发给额外的云端提取服务。原始CSS不被改写，字体文件默认不再分发。
@@ -86,9 +86,12 @@ macOS已实测；Windows/Linux的依赖发现已实现，端到端实机未验�
 | `scripts/design.py` | doctor、init、capture、build、export、verify统一入口 |
 | `scripts/capture.py` | 计划、预算、恢复与证据提交 |
 | `scripts/capture_browser.mjs` / `cdp.mjs` | 浏览器采集 / 隔离进程与协议传输 |
+| `scripts/document_guard.mjs` | 当前主文档身份、就绪与导航恢复 |
+| `scripts/scroll_walk.mjs` | 窗口和内部容器的有界走查及覆盖缺口 |
 | `scripts/common.py` / `ledger.py` / `model.py` | 证据基础合同、当前范围/任务、候选归并与验证 |
 | `scripts/storage.py` | 无损压缩/共享记录、旧数据迁移与引用保护清理 |
 | `scripts/colors.py` / `reference.py` / `documents.py` / `exporter.py` | 颜色、展示摘要、文档与导出 |
+| `scripts/css_safety.py` | CSS执行值资源校验，以及预览共用的资源函数策略 |
 | `assets/probe.js` | 共用DOM与计算样式探针 |
 | `assets/preview.html` / `preview.css` / `preview.js` | 预览源码；导出时内嵌 |
 | `assets/readme/` | 仓库首页插图 |
