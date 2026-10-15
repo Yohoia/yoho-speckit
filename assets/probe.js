@@ -96,7 +96,7 @@
         for (const name of rule.style) {
           const value = rule.style.getPropertyValue(name).trim();
           if (name.startsWith('--')) sourceVariables.push({name, value, selector: rule.selectorText || '', href, context});
-          if (name.startsWith('--') || /^(color|fill|stroke|font|line-height|letter-spacing|background|border|box-shadow|gap|padding|margin|max-width|transition|animation)/.test(name)) values[name] = value;
+          if (name.startsWith('--') || /^(color|fill|stroke|font|line-height|letter-spacing|background|border|outline|box-shadow|gap|padding|margin|max-width|transition|animation)/.test(name)) values[name] = value;
         }
         if (Object.keys(values).length) {
           sourceRules.push({selector: rule.selectorText || '', href, context, values}); declarationCount++;

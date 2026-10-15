@@ -1,6 +1,7 @@
 """Refero-shaped Markdown, clipped before Imagery for this Skill's delivery contract."""
 from colors import normalize_css
 from reference import family_name, font_summary, line_ratio, metric_rows
+from model import visible_outline
 
 
 def cell(value):
@@ -45,6 +46,9 @@ def summary_styles(styles):
                 +' '+normalize_css(styles.get('border'+side+'Color','未确认'))))
     if len(borders)==4 and len({value for side,value in borders})==1:parts.append('Border '+borders[0][1])
     else:parts.extend(side+' border '+value for side,value in borders)
+    if visible_outline(styles):
+        parts.append('Outline '+styles['outlineWidth']+' '+styles['outlineStyle']+' '+normalize_css(styles['outlineColor']))
+        parts.append('Outline offset '+styles.get('outlineOffset','未确认'))
     if styles.get('boxShadow') not in {None,'none'}:parts.append('Shadow '+normalize_css(styles['boxShadow']))
     return '; '.join(parts)+'.' if parts else '样式组合未确认。'
 

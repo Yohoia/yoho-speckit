@@ -28,6 +28,7 @@ SUFFIX = dict(fontFamily='font-family', fontSize='font-size', fontWeight='font-w
 PROPERTY_ALIASES = {
     'color': ('color',), 'backgroundColor': ('background-color', 'background'),
     'backgroundImage': ('background-image', 'background'),
+    'outlineColor': ('outline-color','outline'),
     'borderTopColor': ('border-top-color', 'border-top', 'border-color', 'border'), 'borderRightColor': ('border-right-color', 'border-right', 'border-color', 'border'),
     'borderBottomColor': ('border-bottom-color', 'border-bottom', 'border-color', 'border'), 'borderLeftColor': ('border-left-color', 'border-left', 'border-color', 'border'),
     'borderTopLeftRadius': ('border-top-left-radius','border-radius'), 'borderTopRightRadius': ('border-top-right-radius','border-radius'),

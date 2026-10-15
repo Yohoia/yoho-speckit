@@ -33,10 +33,10 @@ function discover(limit) {
 }
 
 export function createScrollWalk(cdp,{maxSteps,dwellMs,maxContainers=4,maxNodes=10000}) {
-  let documentKey,steps=0,selected=new Map(),omitted=0,horizontal=0,truncated=false,stalled=new Set(),unavailable=new Set();
+  let documentKey,steps=0,selected=new Map(),ranges=new Map(),omitted=0,horizontal=0,truncated=false,stalled=new Set(),unavailable=new Set();
   const bind=identity=>{
     const key=identity.frameId+':'+identity.loaderId;
-    if(key!==documentKey){documentKey=key;selected.clear();omitted=horizontal=0;truncated=false;stalled.clear();unavailable.clear();}
+    if(key!==documentKey){documentKey=key;selected.clear();ranges.clear();omitted=horizontal=0;truncated=false;stalled.clear();unavailable.clear();}
   };
   const read=async()=>{
     const data=await cdp.evaluate('('+discover+')('+maxNodes+')');
@@ -48,17 +48,35 @@ export function createScrollWalk(cdp,{maxSteps,dwellMs,maxContainers=4,maxNodes=
     omitted=Math.max(omitted,data.containers.filter(x=>!selected.has(x.selector)).length);
     const containers=data.containers.filter(x=>selected.has(x.selector));
     for(const selector of selected.keys())if(!containers.some(x=>x.selector===selector))unavailable.add(selector);
-    return [data.document,...containers];
+    const targets=[data.document,...containers];
+    for(const target of targets){
+      if(!ranges.has(target.selector))ranges.set(target.selector,{startedAtTop:false,coveredTo:0,resetAttempted:false});
+      const range=ranges.get(target.selector);
+      if(!target.visible)continue;
+      if(target.y<=2)range.startedAtTop=true;
+      if(range.startedAtTop&&target.y<=range.coveredTo+2)range.coveredTo=Math.max(range.coveredTo,target.y+target.height);
+    }
+    return targets;
+  };
+  const scroll=async(item,y,check)=>{
+    await check();
+    await cdp.evaluate(`(()=>{const el=${item.kind==='document'?'document.scrollingElement||document.documentElement':'document.querySelector('+JSON.stringify(item.selector)+')'};if(el)el.scrollTo({top:${y},behavior:'instant'});})()`);
+    steps++;await sleep(dwellMs);await check();return read();
   };
   const to=async(fraction,move,check)=>{
     let targets=await read();
-    while(move&&steps<maxSteps){
-      await check();
-      const item=targets.find(t=>t.visible&&!stalled.has(t.selector)&&t.y<(t.total-t.height)*fraction-2);
+    while(steps<maxSteps){
+      // Normalize each newly visible target once. A failed reset remains a gap.
+      const reset=targets.find(t=>t.visible&&!ranges.get(t.selector).startedAtTop&&!ranges.get(t.selector).resetAttempted);
+      if(reset){
+        ranges.get(reset.selector).resetAttempted=true;
+        targets=await scroll(reset,0,check);continue;
+      }
+      if(!move)break;
+      const item=targets.find(t=>t.visible&&ranges.get(t.selector).startedAtTop&&!stalled.has(t.selector)&&t.y<(t.total-t.height)*fraction-2);
       if(!item)break;
       const y=Math.min((item.total-item.height)*fraction,item.y+item.height*.85);
-      await cdp.evaluate(`(()=>{const el=${item.kind==='document'?'document.scrollingElement||document.documentElement':'document.querySelector('+JSON.stringify(item.selector)+')'};if(el)el.scrollTo({top:${y},behavior:'instant'});})()`);
-      steps++;await sleep(dwellMs);await check();targets=await read();
+      targets=await scroll(item,y,check);
       const after=targets.find(t=>t.selector===item.selector);
       if(after&&Math.abs(after.y-item.y)<1&&after.total===item.total)stalled.add(item.selector);
     }
@@ -71,11 +89,16 @@ export function createScrollWalk(cdp,{maxSteps,dwellMs,maxContainers=4,maxNodes=
     if(stalled.size)gaps.push('scroll targets stalled: '+stalled.size);
     if(unavailable.size)gaps.push('scroll containers changed or became unavailable: '+unavailable.size);
     for(const target of targets){
+      const range=ranges.get(target.selector);
+      target.startedAtTop=range.startedAtTop;target.coveredTo=range.coveredTo;
+      target.rangeComplete=range.startedAtTop&&range.coveredTo>=target.total-2;
       target.atEnd=target.y+target.height>=target.total-2;
+      if(!range.startedAtTop)gaps.push('scroll target start not observed: '+(target.selector||'document'));
+      else if(target.atEnd&&!target.rangeComplete)gaps.push('scroll target has unvisited range: '+(target.selector||'document'));
       if(target.kind==='element'&&!target.atEnd&&!target.visible)gaps.push('scroll container outside viewport: '+target.selector);
     }
     const complete=!omitted&&!truncated&&!horizontal&&!stalled.size&&!unavailable.size&&
-      targets.every(t=>t.atEnd&&(t.kind==='document'||selected.get(t.selector)));
+      targets.every(t=>t.atEnd&&t.rangeComplete&&(t.kind==='document'||selected.get(t.selector)));
     return {targets,stepsUsed:steps,maxSteps,maxContainers,maxNodes,omittedContainers:omitted,
       discoveryTruncated:truncated,horizontalRegions:horizontal,complete,gaps};
   };

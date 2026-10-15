@@ -21,7 +21,9 @@ design-tokens.json 使用 $type/$value/$description 和自有扩展字段。
 这是面向 CSS 的交换格式，不宣称已验证每个设计工具的导入合同。
 渐变在文档表格与预览标签中统一显示 Gradient，包括使用 in oklab 插值的渐变。
 CSS、Tailwind 和 JSON 的 $value 保留可执行的完整渐变函数，其色标转换为 hex；不能把 Gradient 当作 CSS 值。
+转换渐变时保留插值空间及色相策略；隐式现代色标转为hex时明确其Oklab插值。含none缺失分量或无法识别的几何表达时保留原执行值，并标记转换限制，避免改变渐变运算。
 shadow 中的颜色也转换为 hex，其他阴影参数与排版组合保持关联。
+已观察组件的可见outline在自然语言样式说明中保留宽度、类型、hex颜色与offset，其颜色Token可回溯outline-color或outline来源候选。
 Tailwind 文件需要用户已有构建环境，preview 无需 Tailwind 或 Node.js。
 design.json 为编辑数据，evidence 保存观察、截图和覆盖。
 export-manifest.json 与 verification.json 记录一致性检查。

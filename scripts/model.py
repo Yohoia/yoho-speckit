@@ -4,6 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from common import coverage, digest, index_for, local_file, read_json, write_json, now, STATUS, evidence_lock
 from css_safety import safe_css
+from colors import rgba
 
 TYPE_PROPS = ('fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
               'fontFeatureSettings', 'fontVariationSettings', 'textTransform')
@@ -18,6 +19,14 @@ LENGTH = re.compile(r'-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:px|rem|em|%|v
 
 def nonzero(value):
     return value and value not in {'0', '0px', 'normal', 'none', 'auto', 'transparent', 'rgba(0, 0, 0, 0)'}
+
+
+def visible_outline(styles):
+    width=styles.get('outlineWidth','')
+    amount=re.match(r'^(\d+(?:\.\d+)?|\.\d+)px$',width)
+    color=styles.get('outlineColor','');channels,_=rgba(color)
+    return bool(amount and float(amount[1])>0 and styles.get('outlineStyle') not in {None,'','none','hidden'} and
+        nonzero(color) and (channels is None or channels[3]>0))
 
 
 def validate_value(category, value):
@@ -85,6 +94,7 @@ def _build(run):
             for edge in ('Top', 'Right', 'Bottom', 'Left'):
                 if nonzero(s.get('border' + edge + 'Width')) and s.get('border' + edge + 'Color'):
                     add('color', s['border' + edge + 'Color'], row, el, 'border' + edge + 'Color')
+            if visible_outline(s):add('color',s['outlineColor'],row,el,'outlineColor')
             if el['tag'] in {'svg','path','circle','rect','polygon','text'}:
                 for prop in ('fill','stroke'):
                     if nonzero(s.get(prop)) and 'url(' not in s[prop]:add('color',s[prop],row,el,prop)
@@ -103,6 +113,7 @@ def _build(run):
                     if nonzero(ps.get(prop)):add('color',ps[prop],row,el,pseudo+'.'+prop)
                 if 'gradient(' in ps.get('backgroundImage',''):add('gradient',ps['backgroundImage'],row,el,pseudo+'.backgroundImage')
                 if nonzero(ps.get('boxShadow')):add('shadow',ps['boxShadow'],row,el,pseudo+'.boxShadow')
+                if visible_outline(ps):add('color',ps['outlineColor'],row,el,pseudo+'.outlineColor')
             kind = 'button' if el.get('role') == 'button' or el.get('componentHint')=='button' else 'input' if el['tag'] in {'input','textarea','select'} else 'navigation' if el['tag'] == 'nav' else None
             if kind:
                 appearance={k:v for k,v in s.items() if k not in {'width','height','minWidth','maxWidth','position'}}

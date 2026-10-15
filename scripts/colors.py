@@ -10,6 +10,44 @@ NAMED = {'transparent':'#00000000','black':'#000000','white':'#ffffff','red':'#f
          'silver':'#c0c0c0','maroon':'#800000','purple':'#800080','fuchsia':'#ff00ff',
          'lime':'#00ff00','olive':'#808000','navy':'#000080','teal':'#008080','aqua':'#00ffff',
          'orange':'#ffa500','rebeccapurple':'#663399'}
+GRADIENT = re.compile(r'\b((?:repeating-)?(?:linear|radial|conic)-gradient)\(',re.I)
+MODERN = re.compile(r'\b(?:lab|lch|oklab|oklch|color)\(',re.I)
+
+
+def gradients(value):
+    """Locate balanced gradient functions, including multi-layer backgrounds."""
+    for match in GRADIENT.finditer(value):
+        depth=1;end=match.end();comma=None
+        while end<len(value) and depth:
+            char=value[end]
+            if char==',' and depth==1 and comma is None:comma=end
+            depth+=(char=='(')-(char==')');end+=1
+        if depth or comma is None:continue
+        yield match.start(),end,match[1].lower(),match.end(),comma
+
+
+def gradient_limitations(value):
+    # Missing components borrow channels during interpolation; hex cannot encode them.
+    return [value[start:end] for start,end,_,_,_ in gradients(value)
+        if re.search(r'\bnone\b',value[start:end],re.I)]
+
+
+def explicit_gradient_spaces(value):
+    """Modern color stops default to Oklab; hex stops would default to sRGB."""
+    for start,end,name,body,comma in reversed(list(gradients(value))):
+        header=value[body:comma].strip()
+        if not MODERN.search(value[body:end]) or re.search(r'\bin\s+[\w-]+',header,re.I):continue
+        # A first argument with geometry is a header; otherwise it is the first stop.
+        geometry = (r'^(?:to\b|[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:deg|grad|rad|turn)\b|0\s*$)' if 'linear' in name else
+            r'^(?:circle\b|ellipse\b|(?:closest|farthest)-(?:side|corner)\b|at\b|[\d.]+(?:px|%|em|rem)(?=\s|$))' if 'radial' in name else r'^(?:from\b|at\b)')
+        if re.match(geometry,header,re.I):
+            value=value[:comma]+' in oklab'+value[comma:]
+        elif re.match(r'^(?:#[\da-f]+\b|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(|[a-z][\w-]*(?=\s|$))',header,re.I):
+            value=value[:body]+'in oklab, '+value[body:]
+        else:
+            # Unrecognized geometry is retained by normalize_css instead of guessed.
+            return None
+    return value
 
 
 def clamp(v):
@@ -127,6 +165,10 @@ def to_hex(value):
 def normalize_css(value):
     """Convert colors within gradients/shadows without changing the CSS operation."""
     if not isinstance(value,str):return value
+    if gradient_limitations(value):return value
+    prepared=explicit_gradient_spaces(value)
+    if prepared is None:return value
+    value=prepared
     whole=to_hex(value)
     if whole!=value:return whole
     result=FUNCTION.sub(lambda match:to_hex(match[0]),value)
@@ -151,6 +193,8 @@ def conversion_info(value):
         operations.append((match[1].lower(),value[match.start():end],match.start(),end))
     samples=[value] if rgba(value)[0] is not None else [text for name,text,_,_ in operations if name in color_functions]
     unsupported=[sample for sample in samples if rgba(sample)[0] is None]
+    unsupported.extend(gradient_limitations(value))
+    if explicit_gradient_spaces(value) is None:unsupported.append(value)
     for name,text,start,end in operations:
         if name not in wrappers|color_functions|{'calc','min','max','clamp'} or (
                 start==0 and end==len(value.strip()) and name not in wrappers|color_functions):

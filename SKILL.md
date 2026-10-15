@@ -4,7 +4,7 @@ description: 从网站网址提取有来源依据的设计规范，生成 DESIGN
 license: MIT
 compatibility: Python 3.10+、Node.js 22+、本机 Chrome 或 Chromium；无需 npm 包和云端 API Key。采集固定使用隔离的本地 CDP 浏览器。macOS 已实测；Windows/Linux 依赖发现已实现，端到端未验证。
 metadata:
-  version: "0.3.5"
+  version: "0.3.6"
 ---
 
 # SpecKit
@@ -98,7 +98,7 @@ refresh 在验证新结果后更新账本。
 ```
 
 四格式保留 Extended/Compact，预览保持既有四个视觉模块。
-单色导出使用支持范围内的 hex；渐变标签为 Gradient，执行值完整保留。
+单色导出使用支持范围内的 hex；渐变标签为 Gradient，执行值保留渐变运算语义。
 在预览中核对桌面/移动、格式切换、复制和下载。
 核对代表数值与来源文件；程序一致性通过不等于提取准确率。
 文件内容有变化时回到模型修改，再统一导出。
